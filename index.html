@@ -1235,12 +1235,28 @@ function runBTcore(mh, mode) {
       if (allM[i] >= rawS) { cS = i; break; }
     }
   }
+    // 找出所有股票實際有資料的最後月份（取最小值，確保所有人都有）
+  var dataEnd = allM[allM.length - 1];
+  stocks.forEach(function(s) {
+    var mo = MONTHLY[s.c];
+    if (mo && mo.length) {
+      var last = mo[mo.length - 1].date;
+      if (last < dataEnd) dataEnd = last;
+    }
+  });
+  // 也限制不能超過今天的年月
+  var todayM = new Date().toISOString().slice(0, 7);
+  if (dataEnd > todayM) dataEnd = todayM;
+
   var cE = allM.length - 1;
+  // 往前找到不超過 dataEnd 的最後 idx
+  while (cE >= MIN + 1 && allM[cE] > dataEnd) cE--;
   if (rawE) {
-    for (var i2 = allM.length - 1; i2 >= MIN + 1; i2--) {
+    for (var i2 = cE; i2 >= MIN + 1; i2--) {
       if (allM[i2] <= rawE) { cE = i2; break; }
     }
   }
+
   if (cS > cE) return null;
 
 
@@ -1257,12 +1273,15 @@ function runBTcore(mh, mode) {
     BENCH_MONTHLY.forEach(function(p) { if (p.date <= m) best = p; });
     return best ? best.c : null;
   }
-  function getMo(code, m) {
+    function getMo(code, m) {
     var mo = MONTHLY[code]; if (!mo) return null;
-    var best = null;
-    mo.forEach(function(p) { if (p.date <= m) best = p; });
-    return best ? best.c : null;
+    // 只接受精確該月的收盤，不用前值填補
+    for (var i = mo.length - 1; i >= 0; i--) {
+      if (mo[i].date === m) return mo[i].c;
+    }
+    return null;
   }
+
 
   for (var idx = cS; idx <= cE; idx++) {
     var sigM  = allM[idx];    // 報酬月（row label）
