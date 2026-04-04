@@ -1237,8 +1237,9 @@ function runBTcore(mh, mode) {
   // allM 只含「能當 nextM」的完整月份（< 本月）
   // sigM 最多只到倒數第二個，nextM 最多只到最後一個，兩者都 < _thisM
   var allMFull = refMo.map(function(p){return p.date;})
-                      .filter(function(m){return m < _thisM;})
+                      .filter(function(m){return m <= _thisM;})
                       .sort();
+
   var allM = allMFull; // loop 用這個
 
 
@@ -1379,8 +1380,7 @@ function runBTcore(mh, mode) {
     if (b0 && b1 && b0 > 0) bNav *= (1 + b1 / b0 - 1);
 
     var hCopy = {}; Object.keys(newH).forEach(function(k) { hCopy[k] = newH[k]; });
-        records.push({ month: nextM, nav: nav, bNav: bNav, holdings: hCopy, pRet: pRet, hurdle: hurdle, stockRets: stockRets });
-
+            records.push({ month: sigM, nav: nav, bNav: bNav, holdings: hCopy, pRet: pRet, hurdle: hurdle, stockRets: stockRets });
     holdings = driftedH;
   }
 
