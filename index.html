@@ -834,6 +834,7 @@ async function smartFetch(s, type) {
     const engine = $('dataSource').value;
     const prx = buildProxies();
     
+    // 獲取原始日線 (唯一精確來源)
     const dailyData = (engine === 'stooq') 
         ? await fetchFromStooq(s) 
         : await fetchOHLCV(s, '1d', prx);
@@ -849,25 +850,23 @@ async function smartFetch(s, type) {
             const firstDay = new Date(year, 0, 1);
             const weekNum = Math.ceil((((dateObj - firstDay) / 86400000) + firstDay.getDay() + 1) / 7);
             const weekKey = `${year}-W${weekNum}`;
-            // 覆蓋法：確保拿到該週最後一個交易日的數據
             weeklyMap[weekKey] = { date: d.date, h: d.h, l: d.l, c: d.c, v: d.v };
         });
         return Object.values(weeklyMap).sort((a, b) => a.date.localeCompare(b.date));
     }
-if (type === 'monthly') {
-    const monthlyMap = {};
-    dailyData.forEach(d => {
-        // 確保日期字串格式正確 (YYYY-MM-DD)
-        const parts = d.date.split('-');
-        if(parts.length < 2) return;
-        const monthKey = parts[0] + '-' + parts[1]; // 強制取得 YYYY-MM
-        
-        // 只有當日期標籤真的屬於該月，才更新價格
-        // 這樣 03-31 的價格絕對會留在 03，不會跑去 02
-        monthlyMap[monthKey] = { date: monthKey, c: d.c };
-    });
-    return Object.values(monthlyMap).sort((a, b) => a.date.localeCompare(b.date));
-}
+
+    if (type === 'monthly') {
+        const monthlyMap = {};
+        dailyData.forEach(d => {
+            const parts = d.date.split('-');
+            if(parts.length < 2) return;
+            const monthKey = parts[0] + '-' + parts[1]; 
+            // 確保 03-31 的價格留在 03，4-02 的價格留在 04
+            monthlyMap[monthKey] = { date: monthKey, c: d.c };
+        });
+        return Object.values(monthlyMap).sort((a, b) => a.date.localeCompare(b.date));
+    }
+} // <-- 之前漏掉的這個括號導致按鍵失效
 
     
 
@@ -885,6 +884,7 @@ async function fetchUpdate(){
   var usCut=new Date(Date.now()-2*24*60*60*1000).toISOString().slice(0,10);
   var thisMonth=new Date().toISOString().slice(0,7);
   var missing=[],stale=[];
+
   stocks.forEach(function(s){
     if(s.tw){
       if(!WEEKLY[s.c]||!WEEKLY[s.c].length||!MONTHLY[s.c]||!MONTHLY[s.c].length){missing.push(s);return;}
@@ -894,38 +894,37 @@ async function fetchUpdate(){
       if(DAILY[s.c][DAILY[s.c].length-1].date<usCut)stale.push(s);
     }
   });
+
   var benchStale=!BENCH_MONTHLY.length||(BENCH_MONTHLY[BENCH_MONTHLY.length-1].date<thisMonth);
   var tnxStale=!TNX_MONTHLY.length||(TNX_MONTHLY[TNX_MONTHLY.length-1].date<thisMonth);
-  if(!missing.length&&!stale.length&&!benchStale&&!tnxStale){sl('updateLog','All data up to date.',true);return;}
+  if(!missing.length&&!stale.length&&!benchStale&&!tnxStale){sl('updateLog','所有資料皆為最新。',true);return;}
+
   var toFetch=missing.concat(stale),failed=[];
-  showL('Updating '+toFetch.length+' stocks...');
+  showL('更新中 ('+toFetch.length+' 檔)...');
+
   for(var i=0;i<toFetch.length;i++){
-    var s=toFetch[i];var isMissing=missing.indexOf(s)>=0;
-    $('loadTxt').textContent=(isMissing?'[NEW] ':'[UPD] ')+s.c+' ('+(i+1)+'/'+toFetch.length+')';
+    var s=toFetch[i];
+    $('loadTxt').textContent=(missing.indexOf(s)>=0?'[新增] ':'[更新] ')+s.c;
     try{
-      if(s.tw){
-        WEEKLY[s.c]=mergeArr(WEEKLY[s.c],await fetchOHLCV(s,'1wk',prx));
-        MONTHLY[s.c]=mergeArr(MONTHLY[s.c],await fetchMonthly(s,prx));
-      }else{
-        DAILY[s.c]=mergeArr(DAILY[s.c],await fetchOHLCV(s,'1d',prx));
-        MONTHLY[s.c]=mergeArr(MONTHLY[s.c],await fetchMonthly(s,prx));
-      }
+        // 關鍵修正：補齊更新時也使用 smartFetch 的日線聚合邏輯
+        const wData = await smartFetch(s, 'ohlcv');
+        const mData = await smartFetch(s, 'monthly');
+        if(s.tw) WEEKLY[s.c] = wData; else DAILY[s.c] = wData;
+        MONTHLY[s.c] = mData;
     }catch(e){failed.push(s.c);}
-    await new Promise(function(r){setTimeout(r,350);});
+    await new Promise(r=>setTimeout(r,400));
   }
+
   if(benchStale){
-    $('loadTxt').textContent='Update ^TWII...';
     try{BENCH_MONTHLY=mergeArr(BENCH_MONTHLY,await fetchMonthly('^TWII',prx));}catch(e){failed.push('^TWII');}
-    await new Promise(function(r){setTimeout(r,350);});
   }
   if(tnxStale){
-    $('loadTxt').textContent='Update ^TNX...';
     try{
       var raw=await fetchMonthly('^TNX',prx);
-      TNX_MONTHLY=[];var lastV=null;
+      TNX_MONTHLY=[]; var lastV=null;
       if(raw.length){
-        var byD={};raw.forEach(function(p){byD[p.date]=p.c;});
-        var cur=new Date(raw[0].date+'-01'),end=new Date(raw[raw.length-1].date+'-01');
+        var byD={};raw.forEach(p=>{byD[p.date]=p.c;});
+        var cur=new Date(raw[0].date+'-01'), end=new Date(raw[raw.length-1].date+'-01');
         while(cur<=end){
           var m=cur.toISOString().slice(0,7);
           if(byD[m]!=null)lastV=byD[m];
@@ -936,19 +935,13 @@ async function fetchUpdate(){
       updTNX();
     }catch(e){failed.push('^TNX');}
   }
-  hideL();updFetchStat(stocks);
-  var newCodes=missing.map(function(s){return s.c;});
-  var staleCodes=stale.map(function(s){return s.c;});
-  var msg='Done. New:'+newCodes.length+' Updated:'+staleCodes.length;
-  if(newCodes.length)msg+='\nNEW: '+newCodes.join(', ');
-  if(staleCodes.length)msg+='\nUPD: '+staleCodes.join(', ');
-  if(failed.length)msg+='\nFAIL: '+failed.join(', ');
-  sl('updateLog',msg,failed.length===0);
-  await buildCache(getEnabledStocks());
-  // 在 fetchAll() 或 fetchUpdate() 的最後一行加入
-   await saveAllToDB(); 
 
+  hideL(); updFetchStat(stocks);
+  sl('updateLog', '完成。新增:'+missing.length+' 更新:'+stale.length + (failed.length?' 失敗:'+failed.join(','):''), failed.length===0);
+  await buildCache(stocks);
+  await saveAllToDB(); 
 }
+
 async function fetchAll() {
   var prx = buildProxies(); var stocks = getEnabledStocks();
   var total = stocks.length + 2, done = 0;
