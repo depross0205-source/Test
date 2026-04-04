@@ -764,8 +764,8 @@ function buildTicker(s){
 }
 async function fetchOHLCV(s, interval, prx) {
   var tk = buildTicker(s);
-  // 不論外部需求為何，內部一律抓取 '1d' (日線) 以確保日期精確對齊
-  var r = await fp('https://query1.finance.yahoo.com/v8/finance/chart/' + tk + '?range=max&interval=1d', prx);
+  // 強制抓取 '1d' 日線，避免 Yahoo API 自動聚合導致的日期偏移 Bug
+  var r = await fp('https://query1.finance.yahoo.com/v8/finance/chart/'+tk+'?range=max&interval=1d', prx);
   var j = await r.json();
   var ch = j && j.chart && j.chart.result && j.chart.result[0];
   if (!ch || !ch.timestamp) throw new Error('無資料');
@@ -773,16 +773,20 @@ async function fetchOHLCV(s, interval, prx) {
   var out = [];
   ch.timestamp.forEach(function(ts, i) {
     var q = ch.indicators.quote[0];
-    var h = q.high[i], l = q.low[i], c = q.close[i], v = q.volume[i];
-    if (c && c > 0) { // 僅紀錄有效收盤價
+    var c = q.close[i];
+    if (c && c > 0) {
       out.push({
         date: new Date(ts * 1000).toISOString().slice(0, 10),
-        h: +h.toFixed(3), l: +l.toFixed(3), c: +c.toFixed(3), v: +v
+        h: +q.high[i].toFixed(3), 
+        l: +q.low[i].toFixed(3), 
+        c: +c.toFixed(3), 
+        v: +q.volume[i]
       });
     }
   });
   return out;
 }
+
 
 async function fetchMonthly(tkOrS,prx){
   var tk=typeof tkOrS==='string'?tkOrS:buildTicker(tkOrS);
@@ -827,51 +831,35 @@ async function fetchMonthly(tkOrS,prx){
 
 // 修改原有的 fetchAll 邏輯，加入來源判斷
 async function smartFetch(s, type) {
-    const engine = $('dataSource').value; // 取得 UI 選單 (Yahoo 或 Stooq)
+    const engine = $('dataSource').value;
     const prx = buildProxies();
-    let dailyData = [];
-
-    // 第一步：獲取原始日線數據 (這是最精確的數據源)
-    try {
-        if (engine === 'stooq') {
-            dailyData = await fetchFromStooq(s);
-        } else {
-            // 強制抓取 Yahoo 的 '1d' 日線，避開有問題的 '1wk' 或 '1mo'
-            dailyData = await fetchOHLCV(s, '1d', prx);
-        }
-    } catch (e) {
-        console.error(`${s.c} 原始數據抓取失敗:`, e);
-        return [];
-    }
+    
+    const dailyData = (engine === 'stooq') 
+        ? await fetchFromStooq(s) 
+        : await fetchOHLCV(s, '1d', prx);
 
     if (!dailyData || dailyData.length === 0) return [];
 
-    // 第二步：根據需求進行「手動聚合 (Resample)」，解決錯置問題
     if (type === 'ohlcv') {
-        // 如果是美股，直接回傳日線 (原本就是日頻)
         if (!s.tw) return dailyData; 
-
-        // 如果是台股，將「日線」合成「週線」
         const weeklyMap = {};
         dailyData.forEach(d => {
             const dateObj = new Date(d.date);
             const year = dateObj.getFullYear();
             const firstDay = new Date(year, 0, 1);
-            // 計算該日期屬於該年第幾週
             const weekNum = Math.ceil((((dateObj - firstDay) / 86400000) + firstDay.getDay() + 1) / 7);
             const weekKey = `${year}-W${weekNum}`;
-            // 關鍵：不斷覆蓋，最終會留下該週最後一個交易日的數據
+            // 覆蓋法：確保拿到該週最後一個交易日的數據
             weeklyMap[weekKey] = { date: d.date, h: d.h, l: d.l, c: d.c, v: d.v };
         });
         return Object.values(weeklyMap).sort((a, b) => a.date.localeCompare(b.date));
     }
 
     if (type === 'monthly') {
-        // 將「日線」合成「月線」，解決 1210 標記錯誤問題
         const monthlyMap = {};
         dailyData.forEach(d => {
-            const monthKey = d.date.slice(0, 7); // 取得 YYYY-MM
-            // 關鍵：不斷覆蓋，確保 2025-10 的收盤價絕對是 10 月最後一天的價格
+            const monthKey = d.date.slice(0, 7); 
+            // 嚴格對齊：該月的最後一筆日線價格即為該月收盤價
             monthlyMap[monthKey] = { date: monthKey, c: d.c };
         });
         return Object.values(monthlyMap).sort((a, b) => a.date.localeCompare(b.date));
@@ -957,44 +945,31 @@ async function fetchUpdate(){
 
 }
 async function fetchAll() {
-  var prx = buildProxies(); 
-  var stocks = getEnabledStocks();
-  var total = stocks.length + 2, done = 0; // 每股抓一次，加指數與 TNX
+  var prx = buildProxies(); var stocks = getEnabledStocks();
+  var total = stocks.length + 2, done = 0;
+  function prog(lbl){ $('loadTxt').textContent = lbl; $('fetchFill').style.width = ((done++ / total) * 100) + '%'; }
   
-  function prog(lbl) { 
-    $('loadTxt').textContent = lbl; 
-    $('fetchFill').style.width = ((done++ / total) * 100) + '%'; 
-  }
-
-  showL('資料同步中...');
+  showL('正在深度同步原始數據...');
   $('fetchProg').classList.remove('hidden');
   var failed = [];
 
   for (let s of stocks) {
     prog((s.tw ? '🇹🇼 ' : '🇺🇸 ') + s.c);
     try {
-      // 抓取並自動 Resample
       const wData = await smartFetch(s, 'ohlcv');
       const mData = await smartFetch(s, 'monthly');
-      
       if (s.tw) WEEKLY[s.c] = wData;
       else DAILY[s.c] = wData;
-      
       MONTHLY[s.c] = mData;
-    } catch (e) {
-      console.error(s.c + " 錯誤:", e);
-      failed.push(s.c);
-    }
+    } catch(e) { failed.push(s.c); }
     await new Promise(r => setTimeout(r, 400));
   }
 
-  // 指數與美債維持原有邏輯，但建議使用 fetchMonthly
   prog('^TWII');
   try { BENCH_MONTHLY = await fetchMonthly('^TWII', prx); } catch(e) { failed.push('^TWII'); }
   prog('^TNX');
   try {
     var raw = await fetchMonthly('^TNX', prx);
-    // ... 原有的 TNX 填充邏輯 ...
     TNX_MONTHLY = []; var lastV = null;
     if(raw.length){
       var byD = {}; raw.forEach(p => { byD[p.date] = p.c; });
@@ -1009,11 +984,9 @@ async function fetchAll() {
     updTNX();
   } catch(e) { failed.push('^TNX'); }
 
-  $('fetchFill').style.width = '100%';
-  $('fetchProg').classList.add('hidden');
+  $('fetchFill').style.width = '100%'; $('fetchProg').classList.add('hidden');
   sl('fetchLog', '完成 ' + (total - failed.length) + '/' + total, failed.length === 0);
-  updFetchStat(stocks);
-  hideL();
+  updFetchStat(stocks); hideL();
   await buildCache(stocks);
   await saveAllToDB(); 
 }
@@ -1084,34 +1057,45 @@ function rawMom(mo,idx,skip){
 }
 function getMonthIdx(mo,yyyymm){for(var i=0;i<mo.length;i++){if(mo[i].date>yyyymm)return i;}return mo.length;}
 async function buildCache(stocks){
-  stocks=stocks||getEnabledStocks();
-  var withData=stocks.filter(function(s){return s.tw?(WEEKLY[s.c]&&MONTHLY[s.c]):(DAILY[s.c]&&MONTHLY[s.c]);});
-  if(!withData.length){updCacheSt();return;}
-  showL('Building cache...');RAW_SCORES={};
-  for(var si=0;si<withData.length;si++){
-    var s=withData[si];$('loadTxt').textContent='Cache: '+s.c+' ('+(si+1)+'/'+withData.length+')';
-    var mo=MONTHLY[s.c],bars=s.tw?WEEKLY[s.c]:DAILY[s.c],N=s.tw?N_TW:N_US;
-    if(!mo||!bars)continue;
-    RAW_SCORES[s.c]={};var allMo=mo.map(function(p){return p.date;});
-    for(var mi=13;mi<allMo.length;mi++){
-      var yyyymm=allMo[mi];var mIdx=getMonthIdx(mo,yyyymm);
-      var cut=bars.filter(function(b){return b.date<=yyyymm+'-31';});
-      var rm=rawMom(mo,mIdx,SKIP_MO);
-      var rb=cut.length>=N?calcBias(cut,N):null;
-      var rs=cut.length>=N+3?calcSlope(cut,N):null;
-      var rv=cut.length>=N+1?calcVol(cut,N):null;
-      var rk=cut.length>=N?calcKbar(cut,N):null;
-      var pn=mo[mIdx-1]?mo[mIdx-1].c:null;
-      var r12=mIdx>=13&&mo[mIdx-13]?pn/mo[mIdx-13].c-1:null;
-      var r6=mIdx>=7&&mo[mIdx-7]?pn/mo[mIdx-7].c-1:null;
-      var r3=mIdx>=4&&mo[mIdx-4]?pn/mo[mIdx-4].c-1:null;
-      RAW_SCORES[s.c][yyyymm]={rm:rm,rb:rb,rs:rs,rv:rv,rk:rk,r12:r12,r6:r6,r3:r3};
+  stocks = stocks || getEnabledStocks();
+  var withData = stocks.filter(s => s.tw ? (WEEKLY[s.c] && MONTHLY[s.c]) : (DAILY[s.c] && MONTHLY[s.c]));
+  if(!withData.length){ updCacheSt(); return; }
+  
+  showL('重新校準動能指標...');
+  RAW_SCORES = {};
+  for(var si=0; si<withData.length; si++){
+    var s = withData[si];
+    var mo = MONTHLY[s.c], bars = s.tw ? WEEKLY[s.c] : DAILY[s.c], N = s.tw ? N_TW : N_US;
+    if(!mo || !bars) continue;
+    
+    RAW_SCORES[s.c] = {};
+    var allMo = mo.map(p => p.date);
+    for(var mi=13; mi<allMo.length; mi++){
+      var yyyymm = allMo[mi];
+      var mIdx = getMonthIdx(mo, yyyymm);
+      
+      // 校正：pn 必須嚴格對齊 yyyymm 的最後一筆數據
+      var currentPoint = mo[mIdx - 1];
+      var pn = (currentPoint && currentPoint.date === yyyymm) ? currentPoint.c : null;
+      
+      var rm = rawMom(mo, mIdx, SKIP_MO);
+      var r12 = (mIdx >= 13 && mo[mIdx-13]) ? pn / mo[mIdx-13].c - 1 : null;
+      var r6  = (mIdx >= 7  && mo[mIdx-7])  ? pn / mo[mIdx-7].c - 1 : null;
+      var r3  = (mIdx >= 4  && mo[mIdx-4])  ? pn / mo[mIdx-4].c - 1 : null;
+
+      var cut = bars.filter(b => b.date <= yyyymm + '-31');
+      var rb = cut.length >= N ? calcBias(cut, N) : null;
+      var rs = cut.length >= N+3 ? calcSlope(cut, N) : null;
+      var rv = cut.length >= N+1 ? calcVol(cut, N) : null;
+      var rk = cut.length >= N ? calcKbar(cut, N) : null;
+
+      RAW_SCORES[s.c][yyyymm] = { rm:rm, rb:rb, rs:rs, rv:rv, rk:rk, r12:r12, r6:r6, r3:r3 };
     }
-    if(si%5===4)await new Promise(function(r){setTimeout(r,0);});
   }
-  CACHE_BUILT=true;CACHE_TS=new Date().toISOString();CACHE_SKIP_MO=SKIP_MO;
-  hideL();updCacheSt();updTNX();
+  CACHE_BUILT = true; CACHE_TS = new Date().toISOString(); 
+  hideL(); updCacheSt();
 }
+
 function updCacheSt(){
   var el=$('cacheTxt');if(!el)return;
   if(!CACHE_BUILT){el.textContent='Cache: not built';el.style.color='var(--mu)';return;}
