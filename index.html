@@ -1578,13 +1578,10 @@ async function upJson(el){
     BENCH_MONTHLY=obj.BENCH_MONTHLY||[];TNX_MONTHLY=obj.TNX_MONTHLY||[];
     updFetchStat();updTNX();await buildCache();sl('dlLog','Loaded! Ready to calculate.',true);
   }catch(err){sl('dlLog','Error: '+err.message,false);}
-  el.value='';
+    el.value='';
 }
-  // 放在這行之後：
-async function upJson(el){ ... }
-
-// 接著放：
 async function clearAndReset() {
+
   if (!confirm('Clear all cached data and IndexedDB?')) return;
   await indexedDB.deleteDatabase('FearlessConsoleDB');
   WEEKLY = {}; MONTHLY = {}; DAILY = {};
