@@ -660,16 +660,14 @@ async function loadFromDB() {
     request.onsuccess = async () => {
       const res = request.result;
       if (res) {
-                        WEEKLY = res.WEEKLY || {};
+        WEEKLY = res.WEEKLY || {};
         MONTHLY = res.MONTHLY || {};
         DAILY = res.DAILY || {};
         BENCH_MONTHLY = res.BENCH_MONTHLY || [];
         TNX_MONTHLY = res.TNX_MONTHLY || [];
-
         updFetchStat();
         updTNX();
         await buildCache();
-
         sl('dlLog', '從資料庫恢復成功 (' + res.ts.slice(0, 16).replace('T', ' ') + ')', true);
         resolve(true);
       } else {
@@ -764,18 +762,28 @@ async function fp(url,proxies){
 function buildTicker(s){
   if(!s.tw)return s.c;if(s.c.charAt(0)==='^'||s.c.indexOf('.')>=0)return s.c;return s.c+'.TW';
 }
-async function fetchOHLCV(s,interval,prx){
-  var tk=buildTicker(s);
-  var r=await fp('https://query1.finance.yahoo.com/v8/finance/chart/'+tk+'?range=max&interval='+interval,prx);
-  var j=await r.json();var ch=j&&j.chart&&j.chart.result&&j.chart.result[0];
-  if(!ch||!ch.timestamp)throw new Error('no data');
-  var out=[];
-  ch.timestamp.forEach(function(ts,i){
-    var q=ch.indicators.quote[0];var h=q.high[i],l=q.low[i],c=q.close[i],v=q.volume[i];
-    if(c&&c>0&&h&&l&&v!=null)out.push({date:new Date(ts*1000).toISOString().slice(0,10),h:+h.toFixed(3),l:+l.toFixed(3),c:+c.toFixed(3),v:+v});
+async function fetchOHLCV(s, interval, prx) {
+  var tk = buildTicker(s);
+  // 不論外部需求為何，內部一律抓取 '1d' (日線) 以確保日期精確對齊
+  var r = await fp('https://query1.finance.yahoo.com/v8/finance/chart/' + tk + '?range=max&interval=1d', prx);
+  var j = await r.json();
+  var ch = j && j.chart && j.chart.result && j.chart.result[0];
+  if (!ch || !ch.timestamp) throw new Error('無資料');
+  
+  var out = [];
+  ch.timestamp.forEach(function(ts, i) {
+    var q = ch.indicators.quote[0];
+    var h = q.high[i], l = q.low[i], c = q.close[i], v = q.volume[i];
+    if (c && c > 0) { // 僅紀錄有效收盤價
+      out.push({
+        date: new Date(ts * 1000).toISOString().slice(0, 10),
+        h: +h.toFixed(3), l: +l.toFixed(3), c: +c.toFixed(3), v: +v
+      });
+    }
   });
   return out;
 }
+
 async function fetchMonthly(tkOrS,prx){
   var tk=typeof tkOrS==='string'?tkOrS:buildTicker(tkOrS);
   var r=await fp('https://query1.finance.yahoo.com/v8/finance/chart/'+tk+'?range=max&interval=1mo',prx);
@@ -819,43 +827,59 @@ async function fetchMonthly(tkOrS,prx){
 
 // 修改原有的 fetchAll 邏輯，加入來源判斷
 async function smartFetch(s, type) {
-  const engine = $('dataSource').value;
-  const prx = buildProxies();
+    const engine = $('dataSource').value; // 取得 UI 選單 (Yahoo 或 Stooq)
+    const prx = buildProxies();
+    let dailyData = [];
 
-  if (engine === 'stooq') {
-    // 1. 先抓取 Stooq 的原始 OHLCV 資料
-    const rawData = await fetchFromStooq(s);
-    if (type === 'ohlcv') return rawData;
-
-    // 2. 如果請求的是 monthly，則從日資料轉換為月收盤價
-    if (type === 'monthly') {
-      const monthlyMap = {};
-      rawData.forEach(d => {
-        const monthKey = d.date.slice(0, 7); // 取 YYYY-MM
-        monthlyMap[monthKey] = { date: monthKey, c: d.c }; // 不斷蓋過，最後一筆就是月底
-      });
-      return Object.values(monthlyMap).sort((a,b) => a.date.localeCompare(b.date));
+    // 第一步：獲取原始日線數據 (這是最精確的數據源)
+    try {
+        if (engine === 'stooq') {
+            dailyData = await fetchFromStooq(s);
+        } else {
+            // 強制抓取 Yahoo 的 '1d' 日線，避開有問題的 '1wk' 或 '1mo'
+            dailyData = await fetchOHLCV(s, '1d', prx);
+        }
+    } catch (e) {
+        console.error(`${s.c} 原始數據抓取失敗:`, e);
+        return [];
     }
-  } else {
-    // Yahoo 原有邏輯
-    if (type === 'ohlcv') return await fetchOHLCV(s, s.tw ? '1wk' : '1d', prx);
-    if (type === 'monthly') return await fetchMonthly(s, prx);
-  }
+
+    if (!dailyData || dailyData.length === 0) return [];
+
+    // 第二步：根據需求進行「手動聚合 (Resample)」，解決錯置問題
+    if (type === 'ohlcv') {
+        // 如果是美股，直接回傳日線 (原本就是日頻)
+        if (!s.tw) return dailyData; 
+
+        // 如果是台股，將「日線」合成「週線」
+        const weeklyMap = {};
+        dailyData.forEach(d => {
+            const dateObj = new Date(d.date);
+            const year = dateObj.getFullYear();
+            const firstDay = new Date(year, 0, 1);
+            // 計算該日期屬於該年第幾週
+            const weekNum = Math.ceil((((dateObj - firstDay) / 86400000) + firstDay.getDay() + 1) / 7);
+            const weekKey = `${year}-W${weekNum}`;
+            // 關鍵：不斷覆蓋，最終會留下該週最後一個交易日的數據
+            weeklyMap[weekKey] = { date: d.date, h: d.h, l: d.l, c: d.c, v: d.v };
+        });
+        return Object.values(weeklyMap).sort((a, b) => a.date.localeCompare(b.date));
+    }
+
+    if (type === 'monthly') {
+        // 將「日線」合成「月線」，解決 1210 標記錯誤問題
+        const monthlyMap = {};
+        dailyData.forEach(d => {
+            const monthKey = d.date.slice(0, 7); // 取得 YYYY-MM
+            // 關鍵：不斷覆蓋，確保 2025-10 的收盤價絕對是 10 月最後一天的價格
+            monthlyMap[monthKey] = { date: monthKey, c: d.c };
+        });
+        return Object.values(monthlyMap).sort((a, b) => a.date.localeCompare(b.date));
+    }
 }
 
 
-function deriveMontlyFromBars(bars){
-  if(!bars||!bars.length)return[];
-  var byMonth={};
-  bars.forEach(function(b){
-    byMonth[b.date.slice(0,7)]=b.c;
-  });
-  return Object.keys(byMonth).sort().map(function(m){
-    return{date:m,c:byMonth[m]};
-  });
-}
 function mergeArr(existing,newData){
-
   var map={};
   (existing||[]).forEach(function(d){map[d.date]=d;});
   (newData||[]).forEach(function(d){map[d.date]=d;});
@@ -885,17 +909,15 @@ async function fetchUpdate(){
   for(var i=0;i<toFetch.length;i++){
     var s=toFetch[i];var isMissing=missing.indexOf(s)>=0;
     $('loadTxt').textContent=(isMissing?'[NEW] ':'[UPD] ')+s.c+' ('+(i+1)+'/'+toFetch.length+')';
-    // 尋找 fetchUpdate 內部的 try-catch 區塊並修改
-try {
-  if (s.tw) {
-    WEEKLY[s.c] = mergeArr(WEEKLY[s.c], await smartFetch(s, 'ohlcv'));
-    MONTHLY[s.c] = mergeArr(MONTHLY[s.c], await smartFetch(s, 'monthly'));
-  } else {
-    DAILY[s.c] = mergeArr(DAILY[s.c], await smartFetch(s, 'ohlcv'));
-    MONTHLY[s.c] = mergeArr(MONTHLY[s.c], await smartFetch(s, 'monthly'));
-  }
-} catch(e) { failed.push(s.c); }
-
+    try{
+      if(s.tw){
+        WEEKLY[s.c]=mergeArr(WEEKLY[s.c],await fetchOHLCV(s,'1wk',prx));
+        MONTHLY[s.c]=mergeArr(MONTHLY[s.c],await fetchMonthly(s,prx));
+      }else{
+        DAILY[s.c]=mergeArr(DAILY[s.c],await fetchOHLCV(s,'1d',prx));
+        MONTHLY[s.c]=mergeArr(MONTHLY[s.c],await fetchMonthly(s,prx));
+      }
+    }catch(e){failed.push(s.c);}
     await new Promise(function(r){setTimeout(r,350);});
   }
   if(benchStale){
@@ -932,63 +954,70 @@ try {
   await buildCache(getEnabledStocks());
   // 在 fetchAll() 或 fetchUpdate() 的最後一行加入
    await saveAllToDB(); 
-// --- 替換台股 (TW) 迴圈部分 ---
-for(var i=0;i<tw.length;i++){
-  var s=tw[i]; prog('TW: '+s.c+' ('+(i+1)+'/'+tw.length+')');
-  try {
-    // 統一使用 smartFetch，它會自動判斷要用 Yahoo 還是 Stooq
-    WEEKLY[s.c] = await smartFetch(s, 'ohlcv');
-    MONTHLY[s.c] = await smartFetch(s, 'monthly');
-  } catch(e) { failed.push(s.c); }
-  await new Promise(r => setTimeout(r, 400)); // 增加一點延遲避免被封鎖
+
 }
-
-// --- 替換美股 (US) 迴圈部分 ---
-for(var i2=0;i2<us.length;i2++){
-  var s2=us[i2]; prog('US: '+s2.c+' ('+(i2+1)+'/'+us.length+')');
-  try {
-    DAILY[s2.c] = await smartFetch(s2, 'ohlcv');
-    MONTHLY[s2.c] = await smartFetch(s2, 'monthly');
-  } catch(e) { failed.push(s2.c); }
-  await new Promise(r => setTimeout(r, 400));
-}
-
-
-async function fetchAll(){
-  var prx=buildProxies();var stocks=getEnabledStocks();
-  var tw=stocks.filter(function(s){return s.tw;}),us=stocks.filter(function(s){return !s.tw;});
-  var total=tw.length*2+us.length*2+2,done=0;
-  function prog(lbl){$('loadTxt').textContent=lbl;$('fetchFill').style.width=((done++/total)*100)+'%';}
-  showL('Preparing...');$('fetchProg').classList.remove('hidden');var failed=[];
+async function fetchAll() {
+  var prx = buildProxies(); 
+  var stocks = getEnabledStocks();
+  var total = stocks.length + 2, done = 0; // 每股抓一次，加指數與 TNX
   
+  function prog(lbl) { 
+    $('loadTxt').textContent = lbl; 
+    $('fetchFill').style.width = ((done++ / total) * 100) + '%'; 
   }
+
+  showL('資料同步中...');
+  $('fetchProg').classList.remove('hidden');
+  var failed = [];
+
+  for (let s of stocks) {
+    prog((s.tw ? '🇹🇼 ' : '🇺🇸 ') + s.c);
+    try {
+      // 抓取並自動 Resample
+      const wData = await smartFetch(s, 'ohlcv');
+      const mData = await smartFetch(s, 'monthly');
+      
+      if (s.tw) WEEKLY[s.c] = wData;
+      else DAILY[s.c] = wData;
+      
+      MONTHLY[s.c] = mData;
+    } catch (e) {
+      console.error(s.c + " 錯誤:", e);
+      failed.push(s.c);
+    }
+    await new Promise(r => setTimeout(r, 400));
+  }
+
+  // 指數與美債維持原有邏輯，但建議使用 fetchMonthly
   prog('^TWII');
-  try{BENCH_MONTHLY=await fetchMonthly('^TWII',prx);}catch(e){failed.push('^TWII');}
-  await new Promise(function(r){setTimeout(r,350);});
+  try { BENCH_MONTHLY = await fetchMonthly('^TWII', prx); } catch(e) { failed.push('^TWII'); }
   prog('^TNX');
-  try{
-    var raw=await fetchMonthly('^TNX',prx);
-    TNX_MONTHLY=[];var lastV=null;
+  try {
+    var raw = await fetchMonthly('^TNX', prx);
+    // ... 原有的 TNX 填充邏輯 ...
+    TNX_MONTHLY = []; var lastV = null;
     if(raw.length){
-      var byD={};raw.forEach(function(p){byD[p.date]=p.c;});
-      var cur=new Date(raw[0].date+'-01'),end=new Date(raw[raw.length-1].date+'-01');
-      while(cur<=end){
-        var m=cur.toISOString().slice(0,7);
-        if(byD[m]!=null)lastV=byD[m];
-        if(lastV!=null)TNX_MONTHLY.push({date:m,c:lastV});
-        cur.setMonth(cur.getMonth()+1);
+      var byD = {}; raw.forEach(p => { byD[p.date] = p.c; });
+      var cur = new Date(raw[0].date + '-01'), end = new Date(raw[raw.length-1].date + '-01');
+      while(cur <= end){
+        var m = cur.toISOString().slice(0, 7);
+        if(byD[m] != null) lastV = byD[m];
+        if(lastV != null) TNX_MONTHLY.push({date: m, c: lastV});
+        cur.setMonth(cur.getMonth() + 1);
       }
     }
     updTNX();
-  }catch(e){failed.push('^TNX');}
-  $('fetchFill').style.width='100%';$('fetchProg').classList.add('hidden');
-  sl('fetchLog','Done '+(total-failed.length)+'/'+total+(failed.length?' | fail:'+failed.slice(0,8).join(','):''),failed.length===0);
-  updFetchStat(stocks);hideL();
-  await buildCache(stocks);
-  // 在 fetchAll() 或 fetchUpdate() 的最後一行加入
-  await saveAllToDB(); 
+  } catch(e) { failed.push('^TNX'); }
 
+  $('fetchFill').style.width = '100%';
+  $('fetchProg').classList.add('hidden');
+  sl('fetchLog', '完成 ' + (total - failed.length) + '/' + total, failed.length === 0);
+  updFetchStat(stocks);
+  hideL();
+  await buildCache(stocks);
+  await saveAllToDB(); 
 }
+
 function updTNX(){
   if(!TNX_MONTHLY.length)return;
   var last=TNX_MONTHLY[TNX_MONTHLY.length-1];
@@ -1250,17 +1279,9 @@ function runBTcore(mh, mode) {
   var stocks = getEnabledStocks().filter(function(s) { return RAW_SCORES[s.c]; });
   if (stocks.length < 3) return null;
 
-      var refMo = MONTHLY[stocks[0].c];
+  var refMo = MONTHLY[stocks[0].c];
   if (!refMo) return null;
-  var _thisM = new Date().toISOString().slice(0, 7);
-  // allM 只含「能當 nextM」的完整月份（< 本月）
-  // sigM 最多只到倒數第二個，nextM 最多只到最後一個，兩者都 < _thisM
-  var allMFull = refMo.map(function(p){return p.date;})
-                      .filter(function(m){return m <= _thisM;})
-                      .sort();
-
-  var allM = allMFull; // loop 用這個
-
+  var allM = refMo.map(function(p) { return p.date; }).sort();
 
   // 取得 UI 設定的起訖日期
   var rawS = $('btS') ? ($('btS').value || '').trim().slice(0, 7) : '';
@@ -1399,50 +1420,10 @@ function runBTcore(mh, mode) {
     if (b0 && b1 && b0 > 0) bNav *= (1 + b1 / b0 - 1);
 
     var hCopy = {}; Object.keys(newH).forEach(function(k) { hCopy[k] = newH[k]; });
-            records.push({ month: sigM, nav: nav, bNav: bNav, holdings: hCopy, pRet: pRet, hurdle: hurdle, stockRets: stockRets });
+    records.push({ month: sigM, nav: nav, bNav: bNav, holdings: hCopy, pRet: pRet, hurdle: hurdle, stockRets: stockRets });
     holdings = driftedH;
   }
 
-    // === 當期持股預覽（以最後完整信號月選股）===
-  if(allMFull.length>=2){
-    var curSigM=allMFull[allMFull.length-1]; // '2026-03'
-    var curHurdle=getHurdle(curSigM);
-    var curSc=calcAllScores(curSigM);
-    var curValid=curSc.filter(function(r){return r.score!==null;});
-    curValid.sort(function(a,b){return b.score-a.score;});
-    var curTsP=curValid.filter(function(r){return r.r12!==null&&r.r12>curHurdle;});
-    var curSel=[];
-    for(var ji=0;ji<curTsP.length&&curSel.length<mh;ji++){
-      var cc2=curTsP[ji];
-      if(curSel.every(function(x){return Math.abs(calcCorr(cc2.s.c,x.s.c,curSigM))<ct;}))curSel.push(cc2);
-    }
-    var curH={};
-    if(!curSel.length){curH={CASH:1.0};}
-    else{
-      var lsc=(capMode==='1330')?1.0:0.5;
-      var lwc=lsc/curSel.length;
-      curSel.forEach(function(r){curH[r.s.c]=lwc;});
-    }
-    var curSR={},curPR=0;
-    var lastNav=records.length?records[records.length-1].nav:nav;
-    var lastBNav=records.length?records[records.length-1].bNav:bNav;
-    Object.keys(curH).forEach(function(c){
-      if(c==='CASH'){curSR.CASH={ret:getTNXRate(curSigM)/12,w:curH[c]};return;}
-      var mo2=MONTHLY[c];if(!mo2)return;
-      var p0=null,p1=null;
-      mo2.forEach(function(p){if(p.date<=curSigM)p0=p.c;});
-      // 找第一筆 > curSigM 的價格（本月 MTD）
-      for(var pi=0;pi<mo2.length;pi++){if(mo2[pi].date>curSigM){p1=mo2[pi].c;break;}}
-      if(p0&&p1&&p0>0){
-        var rs=p1/p0-1;curPR+=curH[c]*rs;curSR[c]={ret:rs,w:curH[c]};
-      }else{curSR[c]={ret:null,w:curH[c]};}
-    });
-    records.push({
-      month:_thisM,nav:lastNav*(1+curPR),bNav:lastBNav,
-      holdings:curH,pRet:curPR,hurdle:curHurdle,
-      stockRets:curSR,isCurrent:true
-    });
-  }
   return records.length >= 6 ? records : null;
 }
 
@@ -1574,8 +1555,8 @@ function renderBT(records,init,mode){
       var lbl=(isShort?'S ':'')+k+(nm&&nm!==k?' '+nm:'');
       return '<span style="background:'+bg+';color:'+col+';border:1px '+bst+' '+col+';padding:1px 6px;border-radius:3px;font-size:10px;font-family:monospace;margin:1px">'+lbl+' '+pct+'</span>';
     }).join('');
-        var mtdTag=r.isCurrent?'<span style="font-size:9px;background:var(--ye);color:#000;padding:1px 4px;border-radius:2px;margin-left:4px">MTD</span>':'';
-    var summaryRow='<tr style="border-top:2px solid var(--bd)'+(r.isCurrent?';opacity:0.8':'')+'"><td class="mono" style="font-weight:700;vertical-align:top">'+r.month+mtdTag+'</td>'
+    var summaryRow='<tr style="border-top:2px solid var(--bd)">'
+    +'<td class="mono" style="font-weight:700;vertical-align:top">'+r.month+'</td>'
     +'<td style="vertical-align:top">'+holdStr+'</td>'
     +'<td class="mono" style="font-size:10px;color:var(--bl);vertical-align:top">'+(r.hurdle*100).toFixed(1)+'%</td>'
     +'<td class="mono" style="color:'+rc+';font-weight:700;vertical-align:top">'+(r.pRet>=0?'+':'')+(r.pRet*100).toFixed(2)+'%</td>'
@@ -1585,9 +1566,7 @@ function renderBT(records,init,mode){
     var detailRows='';
     if(r.stockRets){
       Object.keys(r.stockRets).forEach(function(k){
-        var sr=r.stockRets[k],ret=sr.ret,w=sr.w||0;
-        var contrib=ret!=null?ret*w:null,pnl=contrib!=null?prevNav*contrib:null;
-
+        var sr=r.stockRets[k],ret=sr.ret,w=sr.w||0,contrib=ret*w,pnl=prevNav*contrib;
         var isShortPos=w<0;
         var isUs=!!(document.querySelector('[data-code="'+k+'"][data-tw="0"]'));
         var col=isShortPos?'var(--bl)':(isUs?'var(--us)':'var(--tw)');
@@ -1601,10 +1580,9 @@ function renderBT(records,init,mode){
         +dirLabel+k+(nm&&nm!==k?' <span style="color:var(--mu);font-size:10px">'+nm+'</span>':'')
         +' <span style="color:var(--mu);font-size:10px">'+absPct+'</span></td>'
         +'<td style="padding:3px 8px;border-bottom:1px solid var(--bd)"></td>'
-               +'<td class="mono" style="padding:3px 8px;border-bottom:1px solid var(--bd);font-size:11px;color:var(--mu)">'+(ret!=null?(ret>=0?'+':'')+(ret*100).toFixed(2)+'%':'---')+'</td>'
-        +'<td class="mono" style="padding:3px 8px;border-bottom:1px solid var(--bd);font-size:11px;color:'+rc2+'">'+(pnl!=null?(pnl>=0?'+$':'-$')+Math.abs(Math.round(pnl)).toLocaleString():'---')+'</td>'
-        +'<td colspan="2" style="padding:3px 8px;border-bottom:1px solid var(--bd);font-size:10px;color:'+rc2+'">'+(contrib!=null?'contrib: '+(contrib>=0?'+':'')+(contrib*100).toFixed(2)+'%':'MTD')+'</td></tr>';
-
+        +'<td class="mono" style="padding:3px 8px;border-bottom:1px solid var(--bd);font-size:11px;color:var(--mu)">'+(ret>=0?'+':'')+(ret*100).toFixed(2)+'%</td>'
+        +'<td class="mono" style="padding:3px 8px;border-bottom:1px solid var(--bd);font-size:11px;color:'+rc2+'">'+(pnl>=0?'+$':'-$')+Math.abs(Math.round(pnl)).toLocaleString()+'</td>'
+        +'<td colspan="2" style="padding:3px 8px;border-bottom:1px solid var(--bd);font-size:10px;color:'+rc2+'">contrib: '+(contrib>=0?'+':'')+(contrib*100).toFixed(2)+'%</td></tr>';
       });
     }
     return summaryRow+detailRows;
