@@ -833,16 +833,12 @@ async function fetchMonthly(tkOrS,prx){
 async function smartFetch(s, type) {
     const engine = $('dataSource').value;
     const prx = buildProxies();
-    
-    // 獲取原始日線 (唯一精確來源)
-    const dailyData = (engine === 'stooq') 
-        ? await fetchFromStooq(s) 
-        : await fetchOHLCV(s, '1d', prx);
+    let dailyData = (engine === 'stooq') ? await fetchFromStooq(s) : await fetchOHLCV(s, '1d', prx);
 
     if (!dailyData || dailyData.length === 0) return [];
 
     if (type === 'ohlcv') {
-        if (!s.tw) return dailyData; 
+        if (!s.tw) return dailyData;
         const weeklyMap = {};
         dailyData.forEach(d => {
             const dateObj = new Date(d.date);
@@ -858,15 +854,15 @@ async function smartFetch(s, type) {
     if (type === 'monthly') {
         const monthlyMap = {};
         dailyData.forEach(d => {
-            const parts = d.date.split('-');
-            if(parts.length < 2) return;
-            const monthKey = parts[0] + '-' + parts[1]; 
-            // 確保 03-31 的價格留在 03，4-02 的價格留在 04
-            monthlyMap[monthKey] = { date: monthKey, c: d.c };
+            const monthKey = d.date.slice(0, 7); // 產出 "2026-02"
+            // 關鍵修正：確保 2026-02-28 的價格絕對不會被 2026-03-01 蓋過
+            if (d.date.startsWith(monthKey)) {
+                monthlyMap[monthKey] = { date: monthKey, c: d.c, realDate: d.date };
+            }
         });
         return Object.values(monthlyMap).sort((a, b) => a.date.localeCompare(b.date));
     }
-} // <-- 之前漏掉的這個括號導致按鍵失效
+}
 
     
 
@@ -1059,40 +1055,45 @@ async function buildCache(stocks){
   var withData = stocks.filter(s => s.tw ? (WEEKLY[s.c] && MONTHLY[s.c]) : (DAILY[s.c] && MONTHLY[s.c]));
   if(!withData.length) return;
   
-  showL('重新校正標籤對齊...');
+  showL('資料庫強迫對齊中...');
   RAW_SCORES = {};
   for(var si=0; si<withData.length; si++){
     var s = withData[si];
     var mo = MONTHLY[s.c], bars = s.tw ? WEEKLY[s.c] : DAILY[s.c], N = s.tw ? N_TW : N_US;
     
-    // 建立一個快速查詢 Map，確保 YYYY-MM 標籤與價格 100% 鎖定
+    // 建立精確查表
     const priceMap = {};
     mo.forEach(p => { priceMap[p.date] = p.c; });
 
     RAW_SCORES[s.c] = {};
-    var allMoKeys = mo.map(p => p.date);
+    var allMonthKeys = Object.keys(priceMap).sort();
 
-    for(var mi=13; mi<allMoKeys.length; mi++){
-      var yyyymm = allMoKeys[mi]; // 當前處理月份，例如 "2026-02"
+    for(var mi=13; mi<allMonthKeys.length; mi++){
+      var yyyymm = allMonthKeys[mi]; // 例如 "2026-02"
       
-      // 直接從 Map 讀取，拒絕使用 mIdx +/- 1
+      // 直接取當月價格，絕不使用 mIdx+/-1
       var pn = priceMap[yyyymm]; 
-      if(!pn) continue;
-
-      // 報酬率計算：對齊 12 個月前的「同一個月份標籤」
-      var d12 = allMoKeys[mi-12], d6 = allMoKeys[mi-6], d3 = allMoKeys[mi-3];
+      
+      // 取得歷史月份標籤
+      var d12 = allMonthKeys[mi-12], d6 = allMonthKeys[mi-6], d3 = allMonthKeys[mi-3];
+      
+      // 計算對齊後的報酬率
       var r12 = priceMap[d12] ? (pn / priceMap[d12] - 1) : null;
       var r6  = priceMap[d6]  ? (pn / priceMap[d6] - 1)  : null;
       var r3  = priceMap[d3]  ? (pn / priceMap[d3] - 1)  : null;
 
-      // 技術指標切割：確保不含任何「未來日期」的日線
+      // 技術指標只計算到該月月底為止
       var cut = bars.filter(b => b.date.slice(0,7) <= yyyymm);
       
-      var rb = cut.length >= N ? calcBias(cut, N) : null;
-      var rs = cut.length >= N+3 ? calcSlope(cut, N) : null;
-      var rk = cut.length >= N ? calcKbar(cut, N) : null;
-
-      RAW_SCORES[s.c][yyyymm] = { pn:pn, r12:r12, r6:r6, r3:r3, rb:rb, rs:rs, rk:rk };
+      RAW_SCORES[s.c][yyyymm] = { 
+        score: null, // 由後續 calcAllScores 計算
+        r12: r12, r6: r6, r3: r3,
+        rm: rawMom(mo, getMonthIdx(mo, yyyymm), SKIP_MO),
+        rb: cut.length >= N ? calcBias(cut, N) : null,
+        rs: cut.length >= N+3 ? calcSlope(cut, N) : null,
+        rv: cut.length >= N+1 ? calcVol(cut, N) : null,
+        rk: cut.length >= N ? calcKbar(cut, N) : null
+      };
     }
   }
   CACHE_BUILT = true; hideL(); updCacheSt();
@@ -1156,34 +1157,46 @@ function calcCorr(c1,c2,yyyymm,n){
   return num/Math.sqrt((d1*d2)||1);
 }
 async function calcSignal() {
-  if (!CACHE_BUILT) { alert('Fetch data first'); return; }
+  if (!CACHE_BUILT) { alert('請先抓取資料'); return; }
   SKIP_MO = !!($('btSkipMo') && $('btSkipMo').checked);
   CORR_WIN = parseInt($('corrW') ? $('corrW').value : '24') || 24;
   if (CACHE_SKIP_MO !== SKIP_MO) { await buildCache(); }
   
   var stocks = getEnabledStocks().filter(function(s) { return RAW_SCORES[s.c]; });
-  if (!stocks.length) { alert('No cached data'); return; }
+  if (!stocks.length) { alert('無快取資料'); return; }
   
-  var mo = MONTHLY[stocks[0].c], yyyymm = mo[mo.length - 1].date, hurdle = getHurdle(yyyymm);
-  var scores = calcAllScores(yyyymm), valid = scores.filter(function(r) { return r.score !== null; });
+  // 核心對齊修正：取得資料庫中最後一個日期標籤 (例如 "2026-03")
+  var mo = MONTHLY[stocks[0].c];
+  var yyyymm = mo[mo.length - 1].date; 
+  var hurdle = getHurdle(yyyymm);
+
+  // 根據該月份標籤提取所有已鎖定的評分
+  var scores = calcAllScores(yyyymm);
+  var valid = scores.filter(function(r) { return r.score !== null; });
   valid.sort(function(a, b) { return b.score - a.score; });
 
-  // --- 新增：相關性屏蔽邏輯 ---
+  // 相關性過濾邏輯 (保持不變)
   var tsPass = valid.filter(function(r) { return r.r12 !== null && r.r12 > hurdle; });
   var ct = gv('corrT') || 0.75, mh = parseInt($('btH') ? $('btH').value : '3') || 3;
   var sel = [];
-  var rejectedByCorr = {}; // 記錄 { '被屏蔽代碼': '造成的衝突代碼' }
+  var rejectedByCorr = {};
 
   for (var i = 0; i < tsPass.length; i++) {
     var cand = tsPass[i];
     var conflict = null;
-    
-    // 與已選中的標的檢查相關性
     for (var x of sel) {
       if (Math.abs(calcCorr(cand.s.c, x.s.c, yyyymm)) >= ct) {
-        conflict = x.s.c;
-        break;
+        conflict = x.s.c; break;
       }
+    }
+    if (!conflict && sel.length < mh) { sel.push(cand); } 
+    else if (conflict) { rejectedByCorr[cand.s.c] = conflict; }
+  }
+
+  renderSig(sel, valid.slice(-3).reverse(), valid, yyyymm, hurdle);
+  renderST(valid, hurdle, sel.map(s => s.s.c), rejectedByCorr);
+}
+
     }
 
     if (!conflict && sel.length < mh) {
@@ -1249,7 +1262,6 @@ function renderSig(sel, wk, all, yyyymm, hurdle) {
 
 function renderST(all, hurdle, selectedCodes, rejectedMap) {
   $('stCard').classList.remove('hidden');
-  // 依照分數由高到低排序
   var sorted = all.filter(function(r) { return r.score !== null; }).sort(function(a, b) { return b.score - a.score; });
   
   var zf = function(v) { return v !== null ? (v >= 0 ? '+' : '') + v.toFixed(2) : '-'; };
@@ -1261,13 +1273,12 @@ function renderST(all, hurdle, selectedCodes, rejectedMap) {
     var isSelected = selectedCodes.includes(r.s.c);
     var conflictWith = rejectedMap[r.s.c];
     
-    // 狀態標籤邏輯
     var statusHtml = '';
     if (isSelected) statusHtml = '<span style="color:var(--gr);font-weight:700">★ 已選入</span>';
     else if (conflictWith) statusHtml = `<span style="color:var(--mu);font-size:10px">🚫 相關性 > ${conflictWith}</span>`;
     else if (!ts) statusHtml = '<span style="color:var(--re)">TS 淘汰</span>';
 
-    // 這裡輸出的 r.r12 等數據，在 buildCache 修正後，會是精確對齊當月的數值
+    // 關鍵輸出對齊：r.r12, r.score 等數值已在 buildCache 中與日期 Key 綁定
     return '<tr><td class="mono" style="color:var(--mu)">' + (i + 1) + '</td>'
     + '<td class="mono" style="font-weight:700;color:' + (isUs ? 'var(--us)' : 'var(--tw)') + '">' + r.s.c + '</td>'
     + '<td>' + r.s.n + '</td>'
