@@ -477,6 +477,7 @@ tr:hover{background:var(--sf2)}
     <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <input type="file" id="fileJson" accept=".json" style="display:none" onchange="upJson(this)">
       <button class="bo sm" onclick="document.getElementById('fileJson').click()">&#x2B06; JSON &#x9084;&#x539F;</button>
+      <button class="bo sm" style="color:var(--re);border-color:var(--re)" onclick="clearAndReset()">&#x1F5D1; Clear DB</button>
       <span style="font-size:10px;color:var(--mu)">&#x4E0A;&#x50B3;&#x5F8C;&#x81EA;&#x52D5;&#x91CD;&#x5EFA;&#x5FEB;&#x53D6;</span>
     </div>
     <div class="log" id="dlLog"></div>
@@ -1579,6 +1580,22 @@ async function upJson(el){
   }catch(err){sl('dlLog','Error: '+err.message,false);}
   el.value='';
 }
+  // 放在這行之後：
+async function upJson(el){ ... }
+
+// 接著放：
+async function clearAndReset() {
+  if (!confirm('Clear all cached data and IndexedDB?')) return;
+  await indexedDB.deleteDatabase('FearlessConsoleDB');
+  WEEKLY = {}; MONTHLY = {}; DAILY = {};
+  BENCH_MONTHLY = []; TNX_MONTHLY = [];
+  CACHE_BUILT = false; CACHE_TS = null;
+  RAW_SCORES = {};
+  sl('dlLog', 'DB cleared. Please run Fetch All.', true);
+  updFetchStat([]);
+  updCacheSt();
+}
+
 function pct(v,d){return(v>=0?'+':'')+(v*100).toFixed(d===undefined?1:d)+'%';}
 function median(arr){
   if(!arr.length)return 0;
