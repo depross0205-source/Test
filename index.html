@@ -762,32 +762,18 @@ async function fp(url,proxies){
 function buildTicker(s){
   if(!s.tw)return s.c;if(s.c.charAt(0)==='^'||s.c.indexOf('.')>=0)return s.c;return s.c+'.TW';
 }
-async function fetchOHLCV(s, interval, prx) {
-  var tk = buildTicker(s);
-  // 強制抓取 '1d' 日線，避免 Yahoo API 自動聚合導致的日期偏移 Bug
-  var r = await fp('https://query1.finance.yahoo.com/v8/finance/chart/'+tk+'?range=max&interval=1d', prx);
-  var j = await r.json();
-  var ch = j && j.chart && j.chart.result && j.chart.result[0];
-  if (!ch || !ch.timestamp) throw new Error('無資料');
-  
-  var out = [];
-  ch.timestamp.forEach(function(ts, i) {
-    var q = ch.indicators.quote[0];
-    var c = q.close[i];
-    if (c && c > 0) {
-      out.push({
-        date: new Date(ts * 1000).toISOString().slice(0, 10),
-        h: +q.high[i].toFixed(3), 
-        l: +q.low[i].toFixed(3), 
-        c: +c.toFixed(3), 
-        v: +q.volume[i]
-      });
-    }
+async function fetchOHLCV(s,interval,prx){
+  var tk=buildTicker(s);
+  var r=await fp('https://query1.finance.yahoo.com/v8/finance/chart/'+tk+'?range=max&interval='+interval,prx);
+  var j=await r.json();var ch=j&&j.chart&&j.chart.result&&j.chart.result[0];
+  if(!ch||!ch.timestamp)throw new Error('no data');
+  var out=[];
+  ch.timestamp.forEach(function(ts,i){
+    var q=ch.indicators.quote[0];var h=q.high[i],l=q.low[i],c=q.close[i],v=q.volume[i];
+    if(c&&c>0&&h&&l&&v!=null)out.push({date:new Date(ts*1000).toISOString().slice(0,10),h:+h.toFixed(3),l:+l.toFixed(3),c:+c.toFixed(3),v:+v});
   });
   return out;
 }
-
-
 async function fetchMonthly(tkOrS,prx){
   var tk=typeof tkOrS==='string'?tkOrS:buildTicker(tkOrS);
   var r=await fp('https://query1.finance.yahoo.com/v8/finance/chart/'+tk+'?range=max&interval=1mo',prx);
@@ -797,11 +783,20 @@ async function fetchMonthly(tkOrS,prx){
   ch.timestamp.forEach(function(ts,i){
     var adj=ch.indicators.adjclose&&ch.indicators.adjclose[0]?ch.indicators.adjclose[0].adjclose[i]:null;
     var cl=ch.indicators.quote[0].close[i];var c=adj!=null?adj:cl;
-    if(c&&c>0)out.push({date:new Date(ts*1000).toISOString().slice(0,7),c:+c.toFixed(4)});
+    if(c&&c>0){
+      // Yahoo monthly timestamp = bar 開始日 (月初)，但 close 實際是該 bar 結束的月末
+      // 直接用 timestamp 當月即正確，不需位移
+      // 但實測發現 Yahoo 的月 timestamp 比實際收盤日早一個月
+      // 修正：將日期往後推一個月
+      var d=new Date(ts*1000);
+      d.setMonth(d.getMonth()+1);
+      out.push({date:d.toISOString().slice(0,7),c:+c.toFixed(4)});
+    }
   });
   var seen={};out.forEach(function(p){seen[p.date]=p;});
   return Object.values(seen).sort(function(a,b){return a.date.localeCompare(b.date);});
 }
+
   async function fetchFromStooq(s) {
     const prx = buildProxies();
     // Stooq 代碼格式: 台股 2330.TW -> 2330.TW, 美股 AAPL -> AAPL.US
@@ -832,40 +827,15 @@ async function fetchMonthly(tkOrS,prx){
 // 修改原有的 fetchAll 邏輯，加入來源判斷
 async function smartFetch(s, type) {
     const engine = $('dataSource').value;
-    const prx = buildProxies();
-    let dailyData = (engine === 'stooq') ? await fetchFromStooq(s) : await fetchOHLCV(s, '1d', prx);
-
-    if (!dailyData || dailyData.length === 0) return [];
-
-    if (type === 'ohlcv') {
-        if (!s.tw) return dailyData;
-        const weeklyMap = {};
-        dailyData.forEach(d => {
-            const dateObj = new Date(d.date);
-            const year = dateObj.getFullYear();
-            const firstDay = new Date(year, 0, 1);
-            const weekNum = Math.ceil((((dateObj - firstDay) / 86400000) + firstDay.getDay() + 1) / 7);
-            const weekKey = `${year}-W${weekNum}`;
-            weeklyMap[weekKey] = { date: d.date, h: d.h, l: d.l, c: d.c, v: d.v };
-        });
-        return Object.values(weeklyMap).sort((a, b) => a.date.localeCompare(b.date));
-    }
-
-    if (type === 'monthly') {
-        const monthlyMap = {};
-        dailyData.forEach(d => {
-            const monthKey = d.date.slice(0, 7); // 產出 "2026-02"
-            // 關鍵修正：確保 2026-02-28 的價格絕對不會被 2026-03-01 蓋過
-            if (d.date.startsWith(monthKey)) {
-                monthlyMap[monthKey] = { date: monthKey, c: d.c, realDate: d.date };
-            }
-        });
-        return Object.values(monthlyMap).sort((a, b) => a.date.localeCompare(b.date));
+    if (engine === 'stooq') {
+        return await fetchFromStooq(s);
+    } else {
+        // 原有的 Yahoo Finance 邏輯
+        const prx = buildProxies();
+        if (type === 'ohlcv') return await fetchOHLCV(s, s.tw ? '1wk' : '1d', prx);
+        if (type === 'monthly') return await fetchMonthly(s, prx);
     }
 }
-
-    
-
 
 function mergeArr(existing,newData){
   var map={};
@@ -880,7 +850,6 @@ async function fetchUpdate(){
   var usCut=new Date(Date.now()-2*24*60*60*1000).toISOString().slice(0,10);
   var thisMonth=new Date().toISOString().slice(0,7);
   var missing=[],stale=[];
-
   stocks.forEach(function(s){
     if(s.tw){
       if(!WEEKLY[s.c]||!WEEKLY[s.c].length||!MONTHLY[s.c]||!MONTHLY[s.c].length){missing.push(s);return;}
@@ -890,37 +859,38 @@ async function fetchUpdate(){
       if(DAILY[s.c][DAILY[s.c].length-1].date<usCut)stale.push(s);
     }
   });
-
   var benchStale=!BENCH_MONTHLY.length||(BENCH_MONTHLY[BENCH_MONTHLY.length-1].date<thisMonth);
   var tnxStale=!TNX_MONTHLY.length||(TNX_MONTHLY[TNX_MONTHLY.length-1].date<thisMonth);
-  if(!missing.length&&!stale.length&&!benchStale&&!tnxStale){sl('updateLog','所有資料皆為最新。',true);return;}
-
+  if(!missing.length&&!stale.length&&!benchStale&&!tnxStale){sl('updateLog','All data up to date.',true);return;}
   var toFetch=missing.concat(stale),failed=[];
-  showL('更新中 ('+toFetch.length+' 檔)...');
-
+  showL('Updating '+toFetch.length+' stocks...');
   for(var i=0;i<toFetch.length;i++){
-    var s=toFetch[i];
-    $('loadTxt').textContent=(missing.indexOf(s)>=0?'[新增] ':'[更新] ')+s.c;
+    var s=toFetch[i];var isMissing=missing.indexOf(s)>=0;
+    $('loadTxt').textContent=(isMissing?'[NEW] ':'[UPD] ')+s.c+' ('+(i+1)+'/'+toFetch.length+')';
     try{
-        // 關鍵修正：補齊更新時也使用 smartFetch 的日線聚合邏輯
-        const wData = await smartFetch(s, 'ohlcv');
-        const mData = await smartFetch(s, 'monthly');
-        if(s.tw) WEEKLY[s.c] = wData; else DAILY[s.c] = wData;
-        MONTHLY[s.c] = mData;
+      if(s.tw){
+        WEEKLY[s.c]=mergeArr(WEEKLY[s.c],await fetchOHLCV(s,'1wk',prx));
+        MONTHLY[s.c]=mergeArr(MONTHLY[s.c],await fetchMonthly(s,prx));
+      }else{
+        DAILY[s.c]=mergeArr(DAILY[s.c],await fetchOHLCV(s,'1d',prx));
+        MONTHLY[s.c]=mergeArr(MONTHLY[s.c],await fetchMonthly(s,prx));
+      }
     }catch(e){failed.push(s.c);}
-    await new Promise(r=>setTimeout(r,400));
+    await new Promise(function(r){setTimeout(r,350);});
   }
-
   if(benchStale){
+    $('loadTxt').textContent='Update ^TWII...';
     try{BENCH_MONTHLY=mergeArr(BENCH_MONTHLY,await fetchMonthly('^TWII',prx));}catch(e){failed.push('^TWII');}
+    await new Promise(function(r){setTimeout(r,350);});
   }
   if(tnxStale){
+    $('loadTxt').textContent='Update ^TNX...';
     try{
       var raw=await fetchMonthly('^TNX',prx);
-      TNX_MONTHLY=[]; var lastV=null;
+      TNX_MONTHLY=[];var lastV=null;
       if(raw.length){
-        var byD={};raw.forEach(p=>{byD[p.date]=p.c;});
-        var cur=new Date(raw[0].date+'-01'), end=new Date(raw[raw.length-1].date+'-01');
+        var byD={};raw.forEach(function(p){byD[p.date]=p.c;});
+        var cur=new Date(raw[0].date+'-01'),end=new Date(raw[raw.length-1].date+'-01');
         while(cur<=end){
           var m=cur.toISOString().slice(0,7);
           if(byD[m]!=null)lastV=byD[m];
@@ -931,60 +901,68 @@ async function fetchUpdate(){
       updTNX();
     }catch(e){failed.push('^TNX');}
   }
+  hideL();updFetchStat(stocks);
+  var newCodes=missing.map(function(s){return s.c;});
+  var staleCodes=stale.map(function(s){return s.c;});
+  var msg='Done. New:'+newCodes.length+' Updated:'+staleCodes.length;
+  if(newCodes.length)msg+='\nNEW: '+newCodes.join(', ');
+  if(staleCodes.length)msg+='\nUPD: '+staleCodes.join(', ');
+  if(failed.length)msg+='\nFAIL: '+failed.join(', ');
+  sl('updateLog',msg,failed.length===0);
+  await buildCache(getEnabledStocks());
+  // 在 fetchAll() 或 fetchUpdate() 的最後一行加入
+   await saveAllToDB(); 
 
-  hideL(); updFetchStat(stocks);
-  sl('updateLog', '完成。新增:'+missing.length+' 更新:'+stale.length + (failed.length?' 失敗:'+failed.join(','):''), failed.length===0);
-  await buildCache(stocks);
-  await saveAllToDB(); 
 }
-
-async function fetchAll() {
-  var prx = buildProxies(); var stocks = getEnabledStocks();
-  var total = stocks.length + 2, done = 0;
-  function prog(lbl){ $('loadTxt').textContent = lbl; $('fetchFill').style.width = ((done++ / total) * 100) + '%'; }
-  
-  showL('正在深度同步原始數據...');
-  $('fetchProg').classList.remove('hidden');
-  var failed = [];
-
-  for (let s of stocks) {
-    prog((s.tw ? '🇹🇼 ' : '🇺🇸 ') + s.c);
-    try {
-      const wData = await smartFetch(s, 'ohlcv');
-      const mData = await smartFetch(s, 'monthly');
-      if (s.tw) WEEKLY[s.c] = wData;
-      else DAILY[s.c] = wData;
-      MONTHLY[s.c] = mData;
-    } catch(e) { failed.push(s.c); }
-    await new Promise(r => setTimeout(r, 400));
+async function fetchAll(){
+  var prx=buildProxies();var stocks=getEnabledStocks();
+  var tw=stocks.filter(function(s){return s.tw;}),us=stocks.filter(function(s){return !s.tw;});
+  var total=tw.length*2+us.length*2+2,done=0;
+  function prog(lbl){$('loadTxt').textContent=lbl;$('fetchFill').style.width=((done++/total)*100)+'%';}
+  showL('Preparing...');$('fetchProg').classList.remove('hidden');var failed=[];
+  for(var i=0;i<tw.length;i++){
+    var s=tw[i];prog('TW wk: '+s.c+' ('+(i+1)+'/'+tw.length+')');
+    try{WEEKLY[s.c]=await fetchOHLCV(s,'1wk',prx);}catch(e){failed.push(s.c+'-W');}
+    await new Promise(function(r){setTimeout(r,350);});
+    prog('TW mo: '+s.c);
+    try{MONTHLY[s.c]=await fetchMonthly(s,prx);}catch(e){failed.push(s.c+'-M');}
+    await new Promise(function(r){setTimeout(r,350);});
   }
-
+  for(var i2=0;i2<us.length;i2++){
+    var s2=us[i2];prog('US day: '+s2.c+' ('+(i2+1)+'/'+us.length+')');
+    try{DAILY[s2.c]=await fetchOHLCV(s2,'1d',prx);}catch(e){failed.push(s2.c+'-D');}
+    await new Promise(function(r){setTimeout(r,350);});
+    prog('US mo: '+s2.c);
+    try{MONTHLY[s2.c]=await fetchMonthly(s2,prx);}catch(e){failed.push(s2.c+'-M');}
+    await new Promise(function(r){setTimeout(r,350);});
+  }
   prog('^TWII');
-  try { BENCH_MONTHLY = await fetchMonthly('^TWII', prx); } catch(e) { failed.push('^TWII'); }
+  try{BENCH_MONTHLY=await fetchMonthly('^TWII',prx);}catch(e){failed.push('^TWII');}
+  await new Promise(function(r){setTimeout(r,350);});
   prog('^TNX');
-  try {
-    var raw = await fetchMonthly('^TNX', prx);
-    TNX_MONTHLY = []; var lastV = null;
+  try{
+    var raw=await fetchMonthly('^TNX',prx);
+    TNX_MONTHLY=[];var lastV=null;
     if(raw.length){
-      var byD = {}; raw.forEach(p => { byD[p.date] = p.c; });
-      var cur = new Date(raw[0].date + '-01'), end = new Date(raw[raw.length-1].date + '-01');
-      while(cur <= end){
-        var m = cur.toISOString().slice(0, 7);
-        if(byD[m] != null) lastV = byD[m];
-        if(lastV != null) TNX_MONTHLY.push({date: m, c: lastV});
-        cur.setMonth(cur.getMonth() + 1);
+      var byD={};raw.forEach(function(p){byD[p.date]=p.c;});
+      var cur=new Date(raw[0].date+'-01'),end=new Date(raw[raw.length-1].date+'-01');
+      while(cur<=end){
+        var m=cur.toISOString().slice(0,7);
+        if(byD[m]!=null)lastV=byD[m];
+        if(lastV!=null)TNX_MONTHLY.push({date:m,c:lastV});
+        cur.setMonth(cur.getMonth()+1);
       }
     }
     updTNX();
-  } catch(e) { failed.push('^TNX'); }
-
-  $('fetchFill').style.width = '100%'; $('fetchProg').classList.add('hidden');
-  sl('fetchLog', '完成 ' + (total - failed.length) + '/' + total, failed.length === 0);
-  updFetchStat(stocks); hideL();
+  }catch(e){failed.push('^TNX');}
+  $('fetchFill').style.width='100%';$('fetchProg').classList.add('hidden');
+  sl('fetchLog','Done '+(total-failed.length)+'/'+total+(failed.length?' | fail:'+failed.slice(0,8).join(','):''),failed.length===0);
+  updFetchStat(stocks);hideL();
   await buildCache(stocks);
+  // 在 fetchAll() 或 fetchUpdate() 的最後一行加入
   await saveAllToDB(); 
-}
 
+}
 function updTNX(){
   if(!TNX_MONTHLY.length)return;
   var last=TNX_MONTHLY[TNX_MONTHLY.length-1];
@@ -1051,55 +1029,34 @@ function rawMom(mo,idx,skip){
 }
 function getMonthIdx(mo,yyyymm){for(var i=0;i<mo.length;i++){if(mo[i].date>yyyymm)return i;}return mo.length;}
 async function buildCache(stocks){
-  stocks = stocks || getEnabledStocks();
-  var withData = stocks.filter(s => s.tw ? (WEEKLY[s.c] && MONTHLY[s.c]) : (DAILY[s.c] && MONTHLY[s.c]));
-  if(!withData.length) return;
-  
-  showL('資料庫強迫對齊中...');
-  RAW_SCORES = {};
-  for(var si=0; si<withData.length; si++){
-    var s = withData[si];
-    var mo = MONTHLY[s.c], bars = s.tw ? WEEKLY[s.c] : DAILY[s.c], N = s.tw ? N_TW : N_US;
-    
-    // 建立精確查表
-    const priceMap = {};
-    mo.forEach(p => { priceMap[p.date] = p.c; });
-
-    RAW_SCORES[s.c] = {};
-    var allMonthKeys = Object.keys(priceMap).sort();
-
-    for(var mi=13; mi<allMonthKeys.length; mi++){
-      var yyyymm = allMonthKeys[mi]; // 例如 "2026-02"
-      
-      // 直接取當月價格，絕不使用 mIdx+/-1
-      var pn = priceMap[yyyymm]; 
-      
-      // 取得歷史月份標籤
-      var d12 = allMonthKeys[mi-12], d6 = allMonthKeys[mi-6], d3 = allMonthKeys[mi-3];
-      
-      // 計算對齊後的報酬率
-      var r12 = priceMap[d12] ? (pn / priceMap[d12] - 1) : null;
-      var r6  = priceMap[d6]  ? (pn / priceMap[d6] - 1)  : null;
-      var r3  = priceMap[d3]  ? (pn / priceMap[d3] - 1)  : null;
-
-      // 技術指標只計算到該月月底為止
-      var cut = bars.filter(b => b.date.slice(0,7) <= yyyymm);
-      
-      RAW_SCORES[s.c][yyyymm] = { 
-        score: null, // 由後續 calcAllScores 計算
-        r12: r12, r6: r6, r3: r3,
-        rm: rawMom(mo, getMonthIdx(mo, yyyymm), SKIP_MO),
-        rb: cut.length >= N ? calcBias(cut, N) : null,
-        rs: cut.length >= N+3 ? calcSlope(cut, N) : null,
-        rv: cut.length >= N+1 ? calcVol(cut, N) : null,
-        rk: cut.length >= N ? calcKbar(cut, N) : null
-      };
+  stocks=stocks||getEnabledStocks();
+  var withData=stocks.filter(function(s){return s.tw?(WEEKLY[s.c]&&MONTHLY[s.c]):(DAILY[s.c]&&MONTHLY[s.c]);});
+  if(!withData.length){updCacheSt();return;}
+  showL('Building cache...');RAW_SCORES={};
+  for(var si=0;si<withData.length;si++){
+    var s=withData[si];$('loadTxt').textContent='Cache: '+s.c+' ('+(si+1)+'/'+withData.length+')';
+    var mo=MONTHLY[s.c],bars=s.tw?WEEKLY[s.c]:DAILY[s.c],N=s.tw?N_TW:N_US;
+    if(!mo||!bars)continue;
+    RAW_SCORES[s.c]={};var allMo=mo.map(function(p){return p.date;});
+    for(var mi=13;mi<allMo.length;mi++){
+      var yyyymm=allMo[mi];var mIdx=getMonthIdx(mo,yyyymm);
+      var cut=bars.filter(function(b){return b.date<=yyyymm+'-31';});
+      var rm=rawMom(mo,mIdx,SKIP_MO);
+      var rb=cut.length>=N?calcBias(cut,N):null;
+      var rs=cut.length>=N+3?calcSlope(cut,N):null;
+      var rv=cut.length>=N+1?calcVol(cut,N):null;
+      var rk=cut.length>=N?calcKbar(cut,N):null;
+      var pn=mo[mIdx-1]?mo[mIdx-1].c:null;
+      var r12=mIdx>=13&&mo[mIdx-13]?pn/mo[mIdx-13].c-1:null;
+      var r6=mIdx>=7&&mo[mIdx-7]?pn/mo[mIdx-7].c-1:null;
+      var r3=mIdx>=4&&mo[mIdx-4]?pn/mo[mIdx-4].c-1:null;
+      RAW_SCORES[s.c][yyyymm]={rm:rm,rb:rb,rs:rs,rv:rv,rk:rk,r12:r12,r6:r6,r3:r3};
     }
+    if(si%5===4)await new Promise(function(r){setTimeout(r,0);});
   }
-  CACHE_BUILT = true; hideL(); updCacheSt();
+  CACHE_BUILT=true;CACHE_TS=new Date().toISOString();CACHE_SKIP_MO=SKIP_MO;
+  hideL();updCacheSt();updTNX();
 }
-
-
 function updCacheSt(){
   var el=$('cacheTxt');if(!el)return;
   if(!CACHE_BUILT){el.textContent='Cache: not built';el.style.color='var(--mu)';return;}
@@ -1157,46 +1114,34 @@ function calcCorr(c1,c2,yyyymm,n){
   return num/Math.sqrt((d1*d2)||1);
 }
 async function calcSignal() {
-  if (!CACHE_BUILT) { alert('請先抓取資料'); return; }
+  if (!CACHE_BUILT) { alert('Fetch data first'); return; }
   SKIP_MO = !!($('btSkipMo') && $('btSkipMo').checked);
   CORR_WIN = parseInt($('corrW') ? $('corrW').value : '24') || 24;
   if (CACHE_SKIP_MO !== SKIP_MO) { await buildCache(); }
   
   var stocks = getEnabledStocks().filter(function(s) { return RAW_SCORES[s.c]; });
-  if (!stocks.length) { alert('無快取資料'); return; }
+  if (!stocks.length) { alert('No cached data'); return; }
   
-  // 核心對齊修正：取得資料庫中最後一個日期標籤 (例如 "2026-03")
-  var mo = MONTHLY[stocks[0].c];
-  var yyyymm = mo[mo.length - 1].date; 
-  var hurdle = getHurdle(yyyymm);
-
-  // 根據該月份標籤提取所有已鎖定的評分
-  var scores = calcAllScores(yyyymm);
-  var valid = scores.filter(function(r) { return r.score !== null; });
+  var mo = MONTHLY[stocks[0].c], yyyymm = mo[mo.length - 1].date, hurdle = getHurdle(yyyymm);
+  var scores = calcAllScores(yyyymm), valid = scores.filter(function(r) { return r.score !== null; });
   valid.sort(function(a, b) { return b.score - a.score; });
 
-  // 相關性過濾邏輯 (保持不變)
+  // --- 新增：相關性屏蔽邏輯 ---
   var tsPass = valid.filter(function(r) { return r.r12 !== null && r.r12 > hurdle; });
   var ct = gv('corrT') || 0.75, mh = parseInt($('btH') ? $('btH').value : '3') || 3;
   var sel = [];
-  var rejectedByCorr = {};
+  var rejectedByCorr = {}; // 記錄 { '被屏蔽代碼': '造成的衝突代碼' }
 
   for (var i = 0; i < tsPass.length; i++) {
     var cand = tsPass[i];
     var conflict = null;
+    
+    // 與已選中的標的檢查相關性
     for (var x of sel) {
       if (Math.abs(calcCorr(cand.s.c, x.s.c, yyyymm)) >= ct) {
-        conflict = x.s.c; break;
+        conflict = x.s.c;
+        break;
       }
-    }
-    if (!conflict && sel.length < mh) { sel.push(cand); } 
-    else if (conflict) { rejectedByCorr[cand.s.c] = conflict; }
-  }
-
-  renderSig(sel, valid.slice(-3).reverse(), valid, yyyymm, hurdle);
-  renderST(valid, hurdle, sel.map(s => s.s.c), rejectedByCorr);
-}
-
     }
 
     if (!conflict && sel.length < mh) {
@@ -1211,59 +1156,42 @@ async function calcSignal() {
   renderST(valid, hurdle, sel.map(s => s.s.c), rejectedByCorr); // 傳入屏蔽資訊
 }
 
-function renderSig(sel, wk, all, yyyymm, hurdle) {
-  var zf = function(v) { return v !== null ? (v >= 0 ? '+' : '') + v.toFixed(2) : '-'; };
-  var pf = function(v) { return v !== null ? (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%' : '-'; };
-  var tnx = getTNXRate(yyyymm);
-  
-  var html = '<div style="font-size:11px;color:var(--mu);margin-bottom:9px">Month: <b style="color:var(--tw)">'+yyyymm+'</b>'
+function renderSig(sel,wk,all,yyyymm,hurdle){
+  var zf=function(v){return v!==null?(v>=0?'+':'')+v.toFixed(2):'-';};
+  var pf=function(v){return v!==null?(v>=0?'+':'')+(v*100).toFixed(1)+'%':'-';};
+  var tnx=getTNXRate(yyyymm);
+  var html='<div style="font-size:11px;color:var(--mu);margin-bottom:9px">Month: <b style="color:var(--tw)">'+yyyymm+'</b>'
   +' | ^TNX: <b style="color:var(--bl)">'+(tnx*100).toFixed(2)+'%</b>'
   +' | Hurdle: <b style="color:var(--ye)">'+(hurdle*100).toFixed(2)+'%</b></div>';
-  
-  html += '<div style="font-size:12px;font-weight:700;color:var(--tw);margin-bottom:6px">Top '+sel.length+'</div><div class="sg">';
-  
-  sel.forEach(function(r, rk) {
-    var isUs = !r.s.tw; 
-    var col = isUs ? 'var(--us)' : 'var(--tw)'; 
-    var rbg = isUs ? 'var(--usd)' : 'var(--twd)';
-    
-    html += '<div class="scard"><div class="shdr"><div><div class="scode" style="color:'+col+'">'+r.s.c+'</div>'
+  html+='<div style="font-size:12px;font-weight:700;color:var(--tw);margin-bottom:6px">Top '+sel.length+'</div><div class="sg">';
+  sel.forEach(function(r,rk){
+    var isUs=!r.s.tw;var col=isUs?'var(--us)':'var(--tw)';var rbg=isUs?'var(--usd)':'var(--twd)';
+    html+='<div class="scard"><div class="shdr"><div><div class="scode" style="color:'+col+'">'+r.s.c+'</div>'
     +'<div class="sname">'+r.s.n+'</div></div>'
     +'<span class="srank" style="background:'+rbg+';color:'+col+';border:1px solid '+col+'">#'+(rk+1)+'</span></div>';
-    
-    html += '<div class="sscore">'+(r.score>=0?'+':'')+r.score.toFixed(2)+'</div><div class="sbars">';
-    
-    [['Mom', r.zm, 'var(--tw)'], ['Bias', r.zb, 'var(--bl)'], ['Slope', r.zs, 'var(--te)'], ['Vol', r.zv, 'var(--ye)'], ['Kbar', r.zk, 'var(--ac)']].forEach(function(b) {
-      if(b[1] === null) return;
-      var w = Math.round(Math.min(100, Math.abs(b[1]) * 25));
-      html += '<div class="sbrow"><span style="width:32px">'+b[0]+'</span>'
+    html+='<div class="sscore">'+(r.score>=0?'+':'')+r.score.toFixed(2)+'</div><div class="sbars">';
+    [['Mom',r.zm,'var(--tw)'],['Bias',r.zb,'var(--bl)'],['Slope',r.zs,'var(--te)'],['Vol',r.zv,'var(--ye)'],['Kbar',r.zk,'var(--ac)']].forEach(function(b){
+      if(b[1]===null)return;var w=Math.round(Math.min(100,Math.abs(b[1])*25));
+      html+='<div class="sbrow"><span style="width:32px">'+b[0]+'</span>'
       +'<div class="sbwrap"><div class="sbfill" style="width:'+w+'%;background:'+b[2]+'"></div></div>'
       +'<span style="width:36px;text-align:right;font-family:monospace">'+zf(b[1])+'</span></div>';
     });
-    
-    // 這裡顯示的 R12 會因為 buildCache 的修正而對齊正確月份
-    html += '</div><div style="margin-top:5px;font-size:10px;color:var(--mu);font-family:monospace">'
+    html+='</div><div style="margin-top:5px;font-size:10px;color:var(--mu);font-family:monospace">'
     +'R12:'+pf(r.r12)+' R6:'+pf(r.r6)+' R3:'+pf(r.r3)+'</div></div>';
   });
-  
-  html += '</div>';
-  if(!sel.length) html += '<div style="color:var(--ye);font-size:12px;margin-bottom:9px">No stocks pass TS - hold cash</div>';
-  
-  // 底部最弱標的渲染... (維持原樣)
-  html += '<div style="font-size:12px;font-weight:700;color:var(--re);margin:9px 0 6px">Weakest 3</div><div class="sg">';
-  wk.forEach(function(r, rk) {
-    html += '<div class="scard wk"><div class="shdr"><div><div class="scode">'+r.scode+'</div>' // 注意這裡改成 r.s.c 若報錯
+  html+='</div>';
+  if(!sel.length)html+='<div style="color:var(--ye);font-size:12px;margin-bottom:9px">No stocks pass TS - hold cash</div>';
+  html+='<div style="font-size:12px;font-weight:700;color:var(--re);margin:9px 0 6px">Weakest 3</div><div class="sg">';
+  wk.forEach(function(r,rk){
+    html+='<div class="scard wk"><div class="shdr"><div><div class="scode">'+r.s.c+'</div>'
     +'<div class="sname">'+r.s.n+'</div></div><span class="srank">W'+(rk+1)+'</span></div>'
     +'<div class="sscore" style="color:var(--re)">'+(r.score>=0?'+':'')+r.score.toFixed(2)+'</div></div>';
   });
-  html += '</div>';
-  $('sigContent').innerHTML = html;
+  html+='</div>';$('sigContent').innerHTML=html;
 }
-
 function renderST(all, hurdle, selectedCodes, rejectedMap) {
   $('stCard').classList.remove('hidden');
   var sorted = all.filter(function(r) { return r.score !== null; }).sort(function(a, b) { return b.score - a.score; });
-  
   var zf = function(v) { return v !== null ? (v >= 0 ? '+' : '') + v.toFixed(2) : '-'; };
   var pf = function(v) { return v !== null ? (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%' : '-'; };
   
@@ -1273,16 +1201,16 @@ function renderST(all, hurdle, selectedCodes, rejectedMap) {
     var isSelected = selectedCodes.includes(r.s.c);
     var conflictWith = rejectedMap[r.s.c];
     
+    // 狀態標籤邏輯
     var statusHtml = '';
     if (isSelected) statusHtml = '<span style="color:var(--gr);font-weight:700">★ 已選入</span>';
     else if (conflictWith) statusHtml = `<span style="color:var(--mu);font-size:10px">🚫 相關性 > ${conflictWith}</span>`;
     else if (!ts) statusHtml = '<span style="color:var(--re)">TS 淘汰</span>';
 
-    // 關鍵輸出對齊：r.r12, r.score 等數值已在 buildCache 中與日期 Key 綁定
     return '<tr><td class="mono" style="color:var(--mu)">' + (i + 1) + '</td>'
     + '<td class="mono" style="font-weight:700;color:' + (isUs ? 'var(--us)' : 'var(--tw)') + '">' + r.s.c + '</td>'
     + '<td>' + r.s.n + '</td>'
-    + '<td style="font-size:11px">' + statusHtml + '</td>'
+    + '<td style="font-size:11px">' + statusHtml + '</td>' // 新增的狀態欄
     + '<td class="mono" style="font-weight:700;color:' + (r.score >= 0 ? 'var(--gr)' : 'var(--re)') + '">' + zf(r.score) + '</td>'
     + '<td class="mono">' + zf(r.zm) + '</td><td class="mono">' + zf(r.zb) + '</td>'
     + '<td class="mono">' + zf(r.zs) + '</td><td class="mono">' + zf(r.zv) + '</td><td class="mono">' + zf(r.zk) + '</td>'
@@ -1292,46 +1220,35 @@ function renderST(all, hurdle, selectedCodes, rejectedMap) {
 }
 
 function runBTcore(mh, mode) {
-  // 檢查是否有選取股票與快取資料
   var stocks = getEnabledStocks().filter(function(s) { return RAW_SCORES[s.c]; });
   if (stocks.length < 3) return null;
-
   var refMo = MONTHLY[stocks[0].c];
   if (!refMo) return null;
   var allM = refMo.map(function(p) { return p.date; }).sort();
 
-  // 取得 UI 設定的起訖日期
   var rawS = $('btS') ? ($('btS').value || '').trim().slice(0, 7) : '';
   var rawE = $('btE') ? ($('btE').value || '').trim().slice(0, 7) : '';
 
-  // 設定計算索引：需保留足夠月份計算動量 (MIN=14)
-  var MIN = 14, cS = MIN;
+  var MIN = 14, cS = MIN + 1;
   if (rawS) {
-    for (var i = MIN; i < allM.length; i++) {
+    for (var i = MIN + 1; i < allM.length; i++) {
       if (allM[i] >= rawS) { cS = i; break; }
     }
   }
-
-  // 因為需要 idx+1 進行月底結算，cE 最大只能到倒數第二個月
-  var cE = allM.length - 2;
+  var cE = allM.length - 1;
   if (rawE) {
-    for (var i2 = allM.length - 2; i2 >= MIN; i2--) {
+    for (var i2 = allM.length - 1; i2 >= MIN + 1; i2--) {
       if (allM[i2] <= rawE) { cE = i2; break; }
     }
   }
+  if (cS > cE) return null;
 
-  // 若資料區間不足，回傳 null 讓 runBT 顯示「資料不足」
-  if (cS > cE) {
-    console.warn("回測區間不足: cS=" + cS + ", cE=" + cE);
-    return null;
-  }
 
-  var INIT = gv('btCap') || 100000, COST = (gv('btC') || 0.3) / 100, ct = gv('corrT') || 0.75;
+    var INIT = gv('btCap') || 100000, COST = (gv('btC') || 0.3) / 100, ct = gv('corrT') || 0.75;
   var shortN = parseInt($('btSN') ? $('btSN').value : '0') || 0;
   var capModeEl = document.querySelector('input[name="capMode"]:checked');
   var capMode = capModeEl ? capModeEl.value : 'neutral';
   var shortTSF = !!($('btSTSF') && $('btSTSF').checked);
-
   var nav = INIT, bNav = INIT, records = [], holdings = { CASH: 1.0 };
 
   function getBench(m) {
@@ -1340,35 +1257,31 @@ function runBTcore(mh, mode) {
     BENCH_MONTHLY.forEach(function(p) { if (p.date <= m) best = p; });
     return best ? best.c : null;
   }
-
   function getMo(code, m) {
-    var mo = MONTHLY[code];
-    if (!mo) return null;
+    var mo = MONTHLY[code]; if (!mo) return null;
     var best = null;
     mo.forEach(function(p) { if (p.date <= m) best = p; });
     return best ? best.c : null;
   }
 
-  // 開始回測迴圈
   for (var idx = cS; idx <= cE; idx++) {
-    var sigM = allM[idx], nextM = allM[idx+1];
+    var sigM  = allM[idx];    // 報酬月（row label）
+    var prevM = allM[idx-1];  // 訊號月（上月底資料選股）
 
-    // 1. 計算訊號 (使用該月初資料)
-    var hurdle = getHurdle(sigM), sc2 = calcAllScores(sigM);
+    var hurdle = getHurdle(prevM);
+    var sc2 = calcAllScores(prevM);
     var valid = sc2.filter(function(r) { return r.score !== null; });
     valid.sort(function(a, b) { return b.score - a.score; });
 
-    // 2. 選取多單標的 (TS 濾網 + 相關性)
     var tsP = valid.filter(function(r) { return r.r12 !== null && r.r12 > hurdle; });
     var sel = [];
     for (var j = 0; j < tsP.length && sel.length < mh; j++) {
       var cand = tsP[j];
-      if (sel.every(function(x) { return Math.abs(calcCorr(cand.s.c, x.s.c, sigM)) < ct; })) {
+      if (sel.every(function(x) { return Math.abs(calcCorr(cand.s.c, x.s.c, prevM)) < ct; })) {
         sel.push(cand);
       }
     }
 
-    // 3. 選取空單標的 (選配)
     var selS = [];
     if (shortN > 0 && sel.length > 0) {
       var longMap = {}; sel.forEach(function(r) { longMap[r.s.c] = 1; });
@@ -1377,14 +1290,17 @@ function runBTcore(mh, mode) {
       sCands.sort(function(a, b) { return a.score - b.score; });
       for (var ks = 0; ks < sCands.length && selS.length < shortN; ks++) {
         var candS = sCands[ks];
-        if (selS.every(function(x) { return Math.abs(calcCorr(candS.s.c, x.s.c, sigM)) < ct; })) {
+        if (selS.every(function(x) { return Math.abs(calcCorr(candS.s.c, x.s.c, prevM)) < ct; })) {
           selS.push(candS);
         }
       }
     }
 
+  // 開始回測迴圈
+  
+
     // 4. 配置權重與計算週轉成本
-    var newH = {};
+        var newH = {};
     if (!sel.length) { newH = { CASH: 1.0 }; }
     else {
       var is1330 = capMode === '1330';
@@ -1409,31 +1325,31 @@ function runBTcore(mh, mode) {
     var tv = 0;
     Object.keys(seen2).forEach(function(c) { tv += Math.abs((newH[c] || 0) - (holdings[c] || 0)); });
 
-    // 5. 計算本月報酬 (sigM 到 nextM)
-    var pRet = 0, cr = getTNXRate(sigM), stockRets = {}, pureRet = 0;
+    var cr = getTNXRate(prevM);
+    var pRet = 0, stockRets = {}, pureRet = 0;
     Object.keys(newH).forEach(function(c) {
       var wt = newH[c];
       if (c === 'CASH') {
         var r_c = cr / 12; pRet += wt * r_c; pureRet += wt * r_c;
         stockRets.CASH = { ret: r_c, w: wt }; return;
       }
-      var p0 = getMo(c, sigM), p1 = getMo(c, nextM);
+      var p0 = getMo(c, prevM), p1 = getMo(c, sigM);
       if (p0 && p1 && p0 > 0) {
         var r_s = p1 / p0 - 1; pRet += wt * r_s; pureRet += wt * r_s;
         stockRets[c] = { ret: r_s, w: wt };
       } else { stockRets[c] = { ret: 0, w: wt }; }
     });
-
     pRet -= (tv / 2) * COST;
     nav *= (1 + pRet);
 
+
     // 6. 計算月底權重飄移
-    var driftedH = {};
+        var driftedH = {};
     Object.keys(newH).forEach(function(c) {
       driftedH[c] = newH[c] * (1 + (stockRets[c] ? stockRets[c].ret : 0)) / (1 + pureRet);
     });
 
-    var b0 = getBench(sigM), b1 = getBench(nextM);
+    var b0 = getBench(prevM), b1 = getBench(sigM);
     if (b0 && b1 && b0 > 0) bNav *= (1 + b1 / b0 - 1);
 
     var hCopy = {}; Object.keys(newH).forEach(function(k) { hCopy[k] = newH[k]; });
