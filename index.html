@@ -1405,15 +1405,29 @@ function runBTcore(mh, mode) {
       continue;
     }
 
-    var tsP = valid.filter(function(r) { return r.r12 !== null && r.r12 > hurdle; });
-
+       var DEFENSIVE = ['TLT','GLD'];
+    var tsP = valid.filter(function(r) {
+      return r.r12 !== null && r.r12 > hurdle && DEFENSIVE.indexOf(r.s.c) === -1;
+    });
+    tsP.sort(function(a, b) { return b.score - a.score; });
     var sel = [];
     for (var j = 0; j < tsP.length && sel.length < mh; j++) {
       var cand = tsP[j];
-           if (sel.every(function(x) { return Math.abs(calcCorr(cand.s.c, x.s.c, scoreM)) < ct; })) {
+      if (sel.every(function(x) { return Math.abs(calcCorr(cand.s.c, x.s.c, scoreM)) < ct; })) {
         sel.push(cand);
       }
     }
+    var slots = Math.min(mh - sel.length, Math.floor(mh / 2));
+    if (slots > 0) {
+      var defCands = sc2.filter(function(r) {
+        return DEFENSIVE.indexOf(r.s.c) !== -1 && r.r12 !== null && r.r12 > hurdle + 0.01;
+      }).sort(function(a, b) { return b.r12 - a.r12; });
+      for (var jd = 0; jd < defCands.length && slots > 0; jd++) {
+        sel.push(defCands[jd]);
+        slots--;
+      }
+    }
+ 
 
     var selS = [];
     if (shortN > 0 && sel.length > 0) {
