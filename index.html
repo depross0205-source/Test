@@ -589,13 +589,25 @@ tr:hover{background:var(--sf2)}
           <label style="display:flex;align-items:center;gap:3px;cursor:pointer"><input type="checkbox" id="rl5" style="width:13px;accent-color:var(--tw)"> 5Y</label>
         </div>
       </div>
-      <div class="fi"><label>Skip Month</label>
+            <div class="fi"><label>Skip Month</label>
         <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;cursor:pointer">
           <input type="checkbox" id="btSkipMo" style="width:14px;accent-color:var(--tw)"> &#x8DF3;&#x904E;&#x6700;&#x8FD1;1&#x6708;
         </label>
       </div>
+      <div class="fi"><label>Signal Lag</label>
+        <div style="display:flex;gap:10px;margin-top:6px;font-size:12px">
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+            <input type="radio" name="lagMode" id="lagT1" value="1" checked style="width:14px;accent-color:var(--tw)"> t-1
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+            <input type="radio" name="lagMode" id="lagT2" value="2" style="width:14px;accent-color:var(--tw)"> t-2
+          </label>
+        </div>
+      </div>
+
     </div>
     <div style="display:flex;gap:8px;margin-top:8px">
+
       <button class="btw" onclick="runBT()" style="flex:1">&#x25B6; &#x57F7;&#x884C;&#x56DE;&#x6E2C;</button>
       <button class="bo" onclick="runCompare()" style="flex:1">&#x25B6; &#x6BD4;&#x8F03; N=1~max</button>
     </div>
