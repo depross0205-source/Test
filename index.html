@@ -748,7 +748,8 @@ function switchTab(name,el){
   updCountByIb(ib);
 }
 function initGroupToggles() {
-  document.querySelectorAll('.ih').forEach(function(ih) {
+  document.querySelectorAll('#panel-pool .ih').forEach(function(ih) {
+
     var ib = ih.nextElementSibling;
     if (!ib || !ib.classList.contains('ib')) return;
     var ibId = ib.id;
