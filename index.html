@@ -787,6 +787,39 @@ function initGroupToggles() {
     ih.insertBefore(wrap, ic);
   });
 }
+function toggleGroup(ibId, turnOn) {
+  var ib = document.getElementById(ibId);
+  if (!ib) return;
+  ib.querySelectorAll('[data-code]').forEach(function(el) {
+    el.dataset.on = turnOn ? '1' : '0';
+    turnOn ? el.classList.add('act') : el.classList.remove('act');
+  });
+  updCountByIb(ib);
+}
+function initGroupToggles() {
+  document.querySelectorAll('.ih').forEach(function(ih) {
+    var ib = ih.nextElementSibling;
+    if (!ib || !ib.classList.contains('ib')) return;
+    var ibId = ib.id;
+    if (!ibId) return;
+    var wrap = document.createElement('span');
+    wrap.style.cssText = 'display:inline-flex;align-items:center;gap:3px;margin-right:6px';
+    var b1 = document.createElement('button');
+    b1.className = 'bo sm';
+    b1.style.cssText = 'padding:1px 5px;font-size:10px;color:var(--gr);border-color:var(--gr)';
+    b1.textContent = '\u5168';
+    b1.onclick = function(e) { e.stopPropagation(); toggleGroup(ibId, true); };
+    var b2 = document.createElement('button');
+    b2.className = 'bo sm';
+    b2.style.cssText = 'padding:1px 5px;font-size:10px;color:var(--re);border-color:var(--re)';
+    b2.textContent = '\u505c';
+    b2.onclick = function(e) { e.stopPropagation(); toggleGroup(ibId, false); };
+    wrap.appendChild(b1);
+    wrap.appendChild(b2);
+    var ic = ih.querySelector('.ic');
+    ih.insertBefore(wrap, ic);
+  });
+}
 
 function toggleStock(code){
   var el=document.querySelector('[data-code="'+code+'"]');if(!el)return;
