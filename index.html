@@ -1448,27 +1448,18 @@ function runBTcore(mh, mode) {
   
 
     // 4. 配置權重與計算週轉成本
-            var newH = {};
+        var newH = {};
     if (!sel.length) { newH = { CASH: 1.0 }; }
     else {
       var is1330 = capMode === '1330';
       var lScale = is1330 ? 1.0 : 0.5, sScale = is1330 ? 0.3 : 0.5;
-      var slotW = lScale / mh;
-      var defItems = sel.filter(function(r) { return DEFENSIVE.indexOf(r.s.c) !== -1; });
-      var stockItems = sel.filter(function(r) { return DEFENSIVE.indexOf(r.s.c) === -1; });
-      var defTotalW = defItems.length * slotW;
-      var stockScale = lScale - defTotalW;
-      defItems.forEach(function(r) { newH[r.s.c] = slotW; });
-      if (stockItems.length > 0) {
-        if (mode === 'rank') {
-          var ldenom = stockItems.length * (stockItems.length + 1) / 2;
-          stockItems.forEach(function(r, i) { newH[r.s.c] = stockScale * (stockItems.length - i) / ldenom; });
-        } else {
-          var lw = stockScale / stockItems.length;
-          stockItems.forEach(function(r) { newH[r.s.c] = lw; });
-        }
+      if (mode === 'rank') {
+        var ldenom = sel.length * (sel.length + 1) / 2;
+        sel.forEach(function(r, i) { newH[r.s.c] = lScale * (sel.length - i) / ldenom; });
+      } else {
+        var lw = lScale / sel.length;
+        sel.forEach(function(r) { newH[r.s.c] = lw; });
       }
-
       if (selS.length) {
         var sdenom = mode === 'rank' ? selS.length * (selS.length + 1) / 2 : selS.length;
         selS.forEach(function(r, i) {
