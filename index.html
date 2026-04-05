@@ -1405,7 +1405,7 @@ function runBTcore(mh, mode) {
       continue;
     }
 
-       var DEFENSIVE = ['TLT','GLD'];
+       var DEFENSIVE = ['TLT','GLD','SGOV'];
     var tsP = valid.filter(function(r) {
       return r.r12 !== null && r.r12 > hurdle && DEFENSIVE.indexOf(r.s.c) === -1;
     });
