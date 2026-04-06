@@ -1197,9 +1197,10 @@ function calcAllScores(yyyymm){
   });
 }
 function calcCorr(c1,c2,yyyymm,n){
-  n=n||CORR_WIN;var m1=MONTHLY[c1],m2=MONTHLY[c2];if(!m1||!m2)return 0;
+  n=n||CORR_WIN;var m1=MONTHLY[c1],m2=MONTHLY[c2];if(!m1||!m2)return 1;
   var i1=getMonthIdx(m1,yyyymm),i2=getMonthIdx(m2,yyyymm),mi=Math.min(i1,i2);
-  if(mi<n+1)return 0;var r1=[],r2=[];
+  if(mi<n+1)return 1;var r1=[],r2=[];
+
   for(var i=mi-n;i<mi;i++){
     var a0=m1[i-1]?m1[i-1].c:null,a1=m1[i]?m1[i].c:null;
     var b0=m2[i-1]?m2[i-1].c:null,b1=m2[i]?m2[i].c:null;
@@ -1338,14 +1339,10 @@ function runBTcore(mh, mode) {
       if (allM[i] >= rawS) { cS = i; break; }
     }
   }
+  var todayM = new Date().toISOString().slice(0, 7);
+  var dataEnd = allM[allM.length - 1] < todayM ? allM[allM.length - 1] : todayM;
 
-
-  var dataEnd = allM[allM.length - 1];
-  stocks.forEach(function(s) {
-    var mo = MONTHLY[s.c];
-    if (mo && mo.length) {
-      var last = mo[mo.length - 1].date;
-      if (last < dataEnd) dataEnd = last;
+ 
     }
   });
   var todayM = new Date().toISOString().slice(0, 7);
