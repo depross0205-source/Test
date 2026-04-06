@@ -1424,7 +1424,8 @@ function runBTcore(mh, mode) {
     var sel = [];
     for (var j = 0; j < tsP.length && sel.length < mh; j++) {
       var cand = tsP[j];
-      if (sel.every(function(x) { return Math.abs(calcCorr(cand.s.c, x.s.c, scoreM)) < ct; })) {
+          var cr = getTNXRate(scoreM);
+
         sel.push(cand);
       }
     }
@@ -1496,7 +1497,8 @@ function runBTcore(mh, mode) {
     var tv = 0;
     Object.keys(seen2).forEach(function(c) { tv += Math.abs((newH[c] || 0) - (holdings[c] || 0)); });
 
-    var cr = getTNXRate(scoreM);
+        var cr = getTNXRate(scoreMM);
+
 
     var pRet = 0, stockRets = {}, pureRet = 0;
     Object.keys(newH).forEach(function(c) {
