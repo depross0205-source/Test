@@ -1377,6 +1377,16 @@ function runBTcore(mh, mode) {
     return best ? best.c : null;
   }
     function getMo(code, m) {
+  var isUS = !!(document.querySelector('[data-code="'+code+'"][data-tw="0"]'));
+  if (isUS && DAILY[code] && DAILY[code].length) {
+    var daily = DAILY[code];
+    var cutoff = m + '-31';
+    var best = null;
+    for (var i = daily.length - 1; i >= 0; i--) {
+      if (daily[i].date <= cutoff) { best = daily[i].c; break; }
+    }
+    return best;
+  }
   var mo = MONTHLY[code]; if (!mo) return null;
   var best = null;
   for (var i = mo.length - 1; i >= 0; i--) {
@@ -1384,6 +1394,7 @@ function runBTcore(mh, mode) {
   }
   return best;
 }
+
 
     for (var idx = cS; idx <= cE; idx++) {
     var sigM   = allM[idx];
