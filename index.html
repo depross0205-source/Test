@@ -971,10 +971,9 @@ async function fetchUpdate(){
     }catch(e){failed.push(s.c);}
     await new Promise(function(r){setTimeout(r,350);});
   }
-    if(benchStale){
-    $('loadTxt').textContent='Update 0050.TW...';
-    try{BENCH_MONTHLY=mergeArr(BENCH_MONTHLY,await fetchMonthly('0050.TW',prx));}catch(e){failed.push('0050.TW');}
-
+  if(benchStale){
+    $('loadTxt').textContent='Update ^TWII...';
+    try{BENCH_MONTHLY=mergeArr(BENCH_MONTHLY,await fetchMonthly('^TWII',prx));}catch(e){failed.push('^TWII');}
     await new Promise(function(r){setTimeout(r,350);});
   }
   if(tnxStale){
@@ -1030,9 +1029,8 @@ async function fetchAll(){
     try{MONTHLY[s2.c]=await fetchMonthly(s2,prx);}catch(e){failed.push(s2.c+'-M');}
     await new Promise(function(r){setTimeout(r,350);});
   }
-    prog('0050.TW');
-  try{BENCH_MONTHLY=await fetchMonthly('0050.TW',prx);}catch(e){failed.push('0050.TW');}
-
+  prog('^TWII');
+  try{BENCH_MONTHLY=await fetchMonthly('^TWII',prx);}catch(e){failed.push('^TWII');}
   await new Promise(function(r){setTimeout(r,350);});
   prog('^TNX');
   try{
@@ -1619,8 +1617,7 @@ function renderBT(records,init,mode){
   +'<div class="mr"><span>CAGR</span><span class="mv">'+fmt(cagr,true)+'</span></div>'
   +'<div class="mr"><span>MDD</span><span class="mv tr">'+fmt(mdd,true)+'</span></div>'
   +'<div class="mr"><span>Sharpe</span><span class="mv tg">'+sh.toFixed(2)+'</span></div></div>'
-   +'<div class="card" style="border-top:3px solid var(--mu)"><div class="ct">0050 B&H</div>'
-
+  +'<div class="card" style="border-top:3px solid var(--mu)"><div class="ct">TAIEX B&H</div>'
   +'<div class="mr"><span>Return</span><span class="mv '+(btr>=0?'tg':'tr')+'">'+fmt(btr,true,true)+'</span></div>'
   +'<div class="mr"><span>CAGR</span><span class="mv">'+fmt(bcagr,true)+'</span></div>'
   +'<div class="mr"><span>Alpha</span><span class="mv '+((cagr-bcagr)>=0?'tg':'tr')+'">'+fmt(cagr-bcagr,true,true)+'</span></div>'
