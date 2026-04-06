@@ -1199,13 +1199,14 @@ function calcAllScores(yyyymm){
 function calcCorr(c1,c2,yyyymm,n){
   n=n||CORR_WIN;var m1=MONTHLY[c1],m2=MONTHLY[c2];if(!m1||!m2)return 1;
   var i1=getMonthIdx(m1,yyyymm),i2=getMonthIdx(m2,yyyymm),mi=Math.min(i1,i2);
-  if(mi<n+1)return 1;var r1=[],r2=[];
-
+    if(mi<n+1)return 1;var r1=[],r2=[];
+  for(var i=mi-n;i<mi;i++){
     var a0=m1[i-1]?m1[i-1].c:null,a1=m1[i]?m1[i].c:null;
     var b0=m2[i-1]?m2[i-1].c:null,b1=m2[i]?m2[i].c:null;
     if(a0&&a1&&b0&&b1&&a0>0&&b0>0){r1.push(a1/a0-1);r2.push(b1/b0-1);}
   }
-  if(r1.length<6)return 0;
+  if(r1.length<6)return 1;
+
   var m1a=r1.reduce(function(a,b){return a+b;},0)/r1.length;
   var m2a=r2.reduce(function(a,b){return a+b;},0)/r2.length;
   var num=0,d1=0,d2=0;
@@ -1338,15 +1339,12 @@ function runBTcore(mh, mode) {
       if (allM[i] >= rawS) { cS = i; break; }
     }
   }
-
-
-    var todayM = new Date().toISOString().slice(0, 7);
-  var dataEnd = allM[allM.length - 1] < todayM ? allM[allM.length - 1] : todayM;
-
-    }
-  });
+  var dataEnd = allM[allM.length - 1];
   var todayM = new Date().toISOString().slice(0, 7);
   if (dataEnd > todayM) dataEnd = todayM;
+
+
+   
 
   var cE = allM.length - 1;
   while (cE >= MIN + LAG && allM[cE] > dataEnd) cE--;
