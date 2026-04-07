@@ -1377,16 +1377,6 @@ function runBTcore(mh, mode) {
     return best ? best.c : null;
   }
     function getMo(code, m) {
-  var isUS = !!(document.querySelector('[data-code="'+code+'"][data-tw="0"]'));
-  if (isUS && DAILY[code] && DAILY[code].length) {
-    var daily = DAILY[code];
-    var cutoff = m + '-31';
-    var best = null;
-    for (var i = daily.length - 1; i >= 0; i--) {
-      if (daily[i].date <= cutoff) { best = daily[i].c; break; }
-    }
-    return best;
-  }
   var mo = MONTHLY[code]; if (!mo) return null;
   var best = null;
   for (var i = mo.length - 1; i >= 0; i--) {
@@ -1394,7 +1384,6 @@ function runBTcore(mh, mode) {
   }
   return best;
 }
-
 
     for (var idx = cS; idx <= cE; idx++) {
     var sigM   = allM[idx];
@@ -1424,8 +1413,7 @@ function runBTcore(mh, mode) {
     var sel = [];
     for (var j = 0; j < tsP.length && sel.length < mh; j++) {
       var cand = tsP[j];
-          var cr = getTNXRate(scoreM);
-
+      if (sel.every(function(x) { return Math.abs(calcCorr(cand.s.c, x.s.c, scoreM)) < ct; })) {
         sel.push(cand);
       }
     }
@@ -1497,8 +1485,7 @@ function runBTcore(mh, mode) {
     var tv = 0;
     Object.keys(seen2).forEach(function(c) { tv += Math.abs((newH[c] || 0) - (holdings[c] || 0)); });
 
-        var cr = getTNXRate(scoreMM);
-
+    var cr = getTNXRate(scoreM);
 
     var pRet = 0, stockRets = {}, pureRet = 0;
     Object.keys(newH).forEach(function(c) {
