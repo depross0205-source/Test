@@ -1407,7 +1407,20 @@ function runBTcore(mh, mode) {
   function getMo(code, m) {
   if (DAILY[code] && DAILY[code].length) {
     var daily = DAILY[code];
-    var cutoff = m + '-31';
+    var cutoff;
+    if (m.length === 7) {
+      var isUS = !!(document.querySelector('[data-code="'+code+'"][data-tw="0"]'));
+      if (isUS) {
+        cutoff = m + '-31';
+      } else {
+        var d = new Date(m + '-01');
+        d.setMonth(d.getMonth() - 1);
+        cutoff = d.toISOString().slice(0, 7) + '-31';
+      }
+    } else {
+      cutoff = m;
+    }
+
     var best = null;
     for (var i = daily.length - 1; i >= 0; i--) {
       if (daily[i].date <= cutoff) { best = daily[i].c; break; }
