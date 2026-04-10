@@ -707,7 +707,6 @@ tr:hover{background:var(--sf2)}
     <div style="display:flex;gap:8px;margin-top:8px">
       <button class="btw" onclick="runBT()" style="flex:1">&#x25B6; &#x57F7;&#x884C;&#x56DE;&#x6E2C;</button>
       <button class="bo" onclick="runCompare()" style="flex:1">&#x25B6; &#x6BD4;&#x8F03; N=1~max</button>
-      <button onclick="runMultiCount()">N &#x6BD4;&#x8F03;</button>
     </div>
     <button class="bte" onclick="runRolling()" style="width:100%;margin-top:6px">&#x25B6; &#x6EFE;&#x52D5;&#x5831;&#x916C;&#x5206;&#x6790;</button>
     <div class="log" id="btLog"></div>
@@ -1250,6 +1249,9 @@ function runBTcore(mh, mode) {
   var INIT = gv('btCap') || 100000, COST = (gv('btC') || 0.3) / 100, ct = gv('corrT') || 0.75;
   var shortN = parseInt($('btSN') ? $('btSN').value : '0') || 0;
   var capMode = document.querySelector('input[name="capMode"]:checked') ? document.querySelector('input[name="capMode"]:checked').value : 'neutral';
+  var wtModeEl = document.querySelector('input[name="wtMode"]:checked');
+var wtMode = wtModeEl ? wtModeEl.value : 'equal';
+
   var shortTSF = !!($('btSTSF') && $('btSTSF').checked);
   
   var indExitOn = $('btIndExit') && $('btIndExit').value === 'on';
@@ -1412,7 +1414,8 @@ var sc2 = calcAllScores(scoringM);
       var lScale = is1330 ? 1.0 : 0.5, sScale = is1330 ? 0.3 : 0.5;
       
       // 配置多頭 (Long)
-      if (mode === 'rank') {
+     if (wtMode === 'rank') {
+
         var ldenom = sel.length * (sel.length + 1) / 2;
         sel.forEach(function(r, i) { target[r.s.c] = lScale * ((sel.length - i) / ldenom) * exposure; });
       } else {
@@ -1422,7 +1425,7 @@ var sc2 = calcAllScores(scoringM);
       
       // 配置空頭 (Short)
       if (selS.length > 0) {
-        var sdenom = mode === 'rank' ? selS.length * (selS.length + 1) / 2 : selS.length;
+        var sdenom = wtMode === 'rank' ? selS.length * (selS.length + 1) / 2 : selS.length;
         selS.forEach(function(r, i) { target[r.s.c] = -sScale * (mode === 'rank' ? ((selS.length - i) / sdenom) : 1 / sdenom) * exposure; });
       }
     }
@@ -1548,6 +1551,10 @@ function runCompare() {
   SKIP_MO = !!($('btSkipMo') && $('btSkipMo').checked);
   CORR_WIN = parseInt($('corrW') ? $('corrW').value : '24') || 24;
   var maxN = parseInt($('btH') ? $('btH').value : '5') || 5, mode = getWeightMode();
+  var elMode = document.getElementById('poolMode');
+var origMode = elMode ? elMode.value : 'large';
+if (elMode) elMode.value = 'large';
+
   sl('btLog', 'Comparing N=1 to ' + maxN + '...', null); showL('Comparing...');
   setTimeout(async function() {
     try {
@@ -1557,6 +1564,7 @@ function runCompare() {
         var recs = runBTcore(n, mode);
         if (recs) results.push({ n: n, recs: recs, k: kpi(recs, init) });
       }
+      if (elMode) elMode.value = origMode;
       if (!results.length) { alert('No results'); hideL(); return; }
             renderCompare(results, init, mode);
       var dStart = results[0].recs[0].month;
