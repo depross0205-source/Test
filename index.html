@@ -707,6 +707,7 @@ tr:hover{background:var(--sf2)}
     <div style="display:flex;gap:8px;margin-top:8px">
       <button class="btw" onclick="runBT()" style="flex:1">&#x25B6; &#x57F7;&#x884C;&#x56DE;&#x6E2C;</button>
       <button class="bo" onclick="runCompare()" style="flex:1">&#x25B6; &#x6BD4;&#x8F03; N=1~max</button>
+      <button onclick="runMultiCount()">N &#x6BD4;&#x8F03;</button>
     </div>
     <button class="bte" onclick="runRolling()" style="width:100%;margin-top:6px">&#x25B6; &#x6EFE;&#x52D5;&#x5831;&#x916C;&#x5206;&#x6790;</button>
     <div class="log" id="btLog"></div>
@@ -1265,7 +1266,10 @@ function runBTcore(mh, mode) {
     var scoreM = getPrevWorkDay(refDaily, prevM, LAG);
 
     var hurdle = getHurdle(scoreM);
-    var sc2 = calcAllScores(scoreM);
+    var skipMoOn = !!($('btSkipMo') && $('btSkipMo').checked);
+var scoringM = skipMoOn ? getPrevWorkDay(refDaily, scoreM, 22) : scoreM;
+var sc2 = calcAllScores(scoringM);
+
     var valid = sc2.filter(function(r) { return r.score !== null; });
     valid.sort(function(a, b) { return b.score - a.score; });
 
@@ -1888,6 +1892,71 @@ window.onload = async function() {
   var hasData = await loadFromDB();
   if (!hasData) console.log('No local data found in IndexedDB.');
 };
+  function runMultiCount() {
+  if (!CACHE_BUILT) { alert('Build cache first'); return; }
+  var el = $('btH');
+  if (!el) { alert('btH not found'); return; }
+  var orig = el.value;
+  var counts = [3, 5, 7, 10];
+  var rows = [];
+
+  counts.forEach(function(n) {
+    el.value = n;
+    var recs = runBTcore(n, 'large');
+    if (!recs || recs.length < 6) { rows.push({ n: n, err: true }); return; }
+
+    var initNav = recs[0].nav / (1 + recs[0].pRet);
+    var finalNav = recs[recs.length - 1].nav;
+    var years = recs.length / 12;
+    var cagr = Math.pow(finalNav / initNav, 1 / years) - 1;
+
+    var peak = initNav, mdd = 0;
+    recs.forEach(function(r) {
+      if (r.nav > peak) peak = r.nav;
+      var dd = (r.nav - peak) / peak;
+      if (dd < mdd) mdd = dd;
+    });
+
+    var rets = recs.map(function(r) { return r.pRet; });
+    var mean = rets.reduce(function(a, b) { return a + b; }, 0) / rets.length;
+    var variance = rets.reduce(function(a, b) {
+      return a + Math.pow(b - mean, 2);
+    }, 0) / rets.length;
+    var sharpe = variance > 0 ? (mean / Math.sqrt(variance)) * Math.sqrt(12) : 0;
+
+    rows.push({ n: n, cagr: cagr, mdd: mdd, sharpe: sharpe });
+  });
+
+  el.value = orig;
+
+  var html = '<table style="border-collapse:collapse;width:100%;font-size:0.9em;text-align:center;">';
+  html += '<tr style="background:#e8f0fe;">'
+    + '<th style="padding:6px 12px;">N</th>'
+    + '<th style="padding:6px 12px;">CAGR</th>'
+    + '<th style="padding:6px 12px;">MDD</th>'
+    + '<th style="padding:6px 12px;">Sharpe</th>'
+    + '</tr>';
+
+  rows.forEach(function(r, i) {
+    var bg = i % 2 === 0 ? '#fff' : '#f8f9fa';
+    if (r.err) {
+      html += '<tr style="background:' + bg + '"><td>' + r.n + '</td><td colspan="3">--</td></tr>';
+    } else {
+      var mddColor = r.mdd < -0.3 ? '#c0392b' : '#555';
+      html += '<tr style="background:' + bg + '">'
+        + '<td style="padding:5px 12px;font-weight:bold;">' + r.n + '</td>'
+        + '<td style="padding:5px 12px;">' + (r.cagr * 100).toFixed(2) + '%</td>'
+        + '<td style="padding:5px 12px;color:' + mddColor + ';">' + (r.mdd * 100).toFixed(2) + '%</td>'
+        + '<td style="padding:5px 12px;">' + r.sharpe.toFixed(2) + '</td>'
+        + '</tr>';
+    }
+  });
+  html += '</table>';
+
+  var out = $('btResult') || $('result') || $('btOut');
+  if (out) out.innerHTML = html;
+}
+
 </script>
 
 
