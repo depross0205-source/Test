@@ -1319,21 +1319,31 @@ var sc2 = calcAllScores(scoringM);
     var pools = { 'tw': [], 'us': [], 'etf': [] };
     var useMA60 = $('ma60Filter') ? $('ma60Filter').value === 'on' : true;
 
+        var exitMap = {};
+    if (useMA60) {
+      Object.keys(holdings).forEach(function(c) {
+        if (c === 'CASH') return;
+        var bars = DAILY[c]; if (!bars) return;
+        var ma = calcMA(bars, scoreM, 60);
+        var price = getPriceOnDate(bars, scoreM);
+        var prevDate = getPrevWorkDay(refDaily, scoreM, 5);
+        var prevMa = calcMA(bars, prevDate, 60);
+        var belowMA = ma && price && price < ma;
+        var slopeNeg = ma && prevMa && ma < prevMa;
+        if (belowMA || slopeNeg) exitMap[c] = true;
+      });
+    }
+
     valid.forEach(function(r) {
       var passMom = r.r240 !== null && r.r240 > hurdle && DEFENSIVE.indexOf(r.s.c) === -1;
       if (!passMom) return;
-      
-      var ma60 = calcMA(DAILY[r.s.c], scoreM, 60);
-      var currentPrice = getPriceOnDate(DAILY[r.s.c], scoreM);
-      var isAboveMA = ma60 && currentPrice && currentPrice >= ma60;
-      var passMA = useMA60 ? isAboveMA : true;
-      if (!passMA) return;
-      
-      var p = r.s.pool; 
+      if (exitMap[r.s.c]) return;
+      var p = r.s.pool;
       if (p === 'tw' || p === 'us' || p === 'etf') {
         if (pools[p]) pools[p].push(r);
       }
     });
+
 
     pools['tw'].sort(function(a, b) { return b.score - a.score; });
     pools['us'].sort(function(a, b) { return b.score - a.score; });
@@ -1361,15 +1371,13 @@ var sc2 = calcAllScores(scoringM);
     const useMA = document.getElementById('ma60Filter').value === 'on';
     
     // [預過濾]：將不符合 TS 或 MA 門檻的直接踢掉
-    var candidates = valid.filter(r => {
-      const passTS = r.r240 !== null && r.r240 > hurdle;
-      if (!passTS) return false;
-      // 排除防禦性資產，避免它們進入主排行
+        var candidates = valid.filter(function(r) {
+      if (r.r240 === null || r.r240 <= hurdle) return false;
       if (['TLT', 'GLD', 'SGOV'].indexOf(r.s.c) !== -1) return false;
-      // 執行嚴格 MA 濾網 (前面段落定義的函數)
-      if (useMA && !isStrictTechnicalPass(r.s.c, scoreM)) return false;
+      if (exitMap[r.s.c]) return false;
       return true;
     });
+
 
     if (mode === 'large') {
       // --- 大池模式：全體大排行 ---
@@ -1848,10 +1856,10 @@ async function calcSignal() {
   const mode = $('poolMode').value, useMA = $('ma60Filter').value === 'on', ct = gv('corrT') || 0.75;
   var sel = [], rejectedMap = {}; 
 
-  allScores.forEach(r => {
-    if (r.r240 <= hurdle) rejectedMap[r.s.c] = "TS 淘汰";
-    else if (useMA && !isStrictTechnicalPass(r.s.c, latestDate)) rejectedMap[r.s.c] = "季線淘汰";
+    allScores.forEach(function(r) {
+    if (r.r240 <= hurdle) rejectedMap[r.s.c] = 'TS \u6DD8\u6C70';
   });
+
 
   if (mode === 'large') {
     var candidates = allScores.filter(r => !rejectedMap[r.s.c]).sort((a,b)=>b.score-a.score);
