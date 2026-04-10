@@ -1561,7 +1561,9 @@ if (elMode) elMode.value = 'large';
       if (CACHE_SKIP_MO !== SKIP_MO) { await buildCache(); }
       var init = gv('btCap') || 100000, results = [];
       for (var n = 1; n <= maxN; n++) {
-        var recs = runBTcore(n, mode);
+        if ($('btH')) $('btH').value = n;
+var recs = runBTcore(n, mode);
+
         if (recs) results.push({ n: n, recs: recs, k: kpi(recs, init) });
       }
       if (elMode) elMode.value = origMode;
