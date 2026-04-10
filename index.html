@@ -642,6 +642,10 @@ tr:hover{background:var(--sf2)}
           </label>
           <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
             <input type="radio" name="wtMode" id="wtRank" value="rank" style="width:14px;accent-color:var(--tw)"> &#x6392;&#x540D;&#x52A0;&#x6B0A;
+        <label style="display:flex;align-items:center;gap:4px;">
+  <input type="radio" name="wtMode" value="ivol"> IV&#x52A0;&#x6B0A;
+</label>
+
           </label>
         </div>
       </div>
@@ -936,6 +940,27 @@ function updFetchStat(){
     return '<span class="bdg" style="background:'+bg+';color:'+col+';border:1px solid '+bd+'">'+s.c+'</span>';
   }).join('');
 }
+  function calcVol(bars, dateStr, win) {
+  if (!bars) return null;
+  var idx = -1;
+  for (var i = 0; i < bars.length; i++) {
+    if (bars[i].date <= dateStr) idx = i; else break;
+  }
+  if (idx < win) return null;
+  var rets = [];
+  for (var j = idx - win + 1; j <= idx; j++) {
+    if (bars[j-1] && bars[j].c > 0 && bars[j-1].c > 0) {
+      rets.push(bars[j].c / bars[j-1].c - 1);
+    }
+  }
+  if (rets.length < 10) return null;
+  var mean = rets.reduce(function(a, b) { return a + b; }, 0) / rets.length;
+  var variance = rets.reduce(function(a, b) {
+    return a + Math.pow(b - mean, 2);
+  }, 0) / rets.length;
+  return Math.sqrt(variance * 252);
+}
+
 function calcMA(bars, dateStr, period) {
   if (!bars || !bars.length) return null;
   
@@ -1419,8 +1444,22 @@ var sc2 = calcAllScores(scoringM);
         var ldenom = sel.length * (sel.length + 1) / 2;
         sel.forEach(function(r, i) { target[r.s.c] = lScale * ((sel.length - i) / ldenom) * exposure; });
       } else {
-        var lw = (lScale / sel.length) * exposure;
-        sel.forEach(function(r) { target[r.s.c] = lw; });
+        if (wtMode === 'ivol') {
+  var volSum = 0;
+  var ivolArr = sel.map(function(r) {
+    var v = calcVol(DAILY[r.s.c], scoreM, 60);
+    v = (v && v > 0) ? v : 0.2;
+    volSum += 1 / v;
+    return { c: r.s.c, iv: 1 / v };
+  });
+  ivolArr.forEach(function(x) {
+    target[x.c] = (lScale * x.iv / volSum) * exposure;
+  });
+} else {
+  var lw = (lScale / sel.length) * exposure;
+  sel.forEach(function(r) { target[r.s.c] = lw; });
+}
+
       }
       
       // 配置空頭 (Short)
